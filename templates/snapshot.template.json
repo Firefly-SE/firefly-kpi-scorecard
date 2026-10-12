@@ -1,0 +1,88 @@
+{
+  "week": "YYYY-Www",
+  "collected_at": "YYYY-MM-DD",
+  "account_id": "<from config.json>",
+  "account_name": "<from config.json>",
+  "window": {
+    "start": "YYYY-MM-DD",
+    "end": "YYYY-MM-DD"
+  },
+  "inventory": {
+    "codified": null,
+    "unmanaged": null,
+    "ghost": null,
+    "drifted": null
+  },
+  "iac_estate": {
+    "stacks_total": null,
+    "stacks_terraform": null
+  },
+  "governance": {
+    "frameworks": {
+      "CIS": null,
+      "NIST": null,
+      "HIPAA": null,
+      "SOC2": null,
+      "ISO27001": null,
+      "PCI-DSS": null,
+      "GDPR": null,
+      "AWS Well-Architected": null,
+      "FireflyBestPractices": null
+    },
+    "policies_total": null,
+    "policies_enabled": null,
+    "policies_custom": null
+  },
+  "automation": {
+    "guardrails_total": null,
+    "guardrails_enabled": null,
+    "guardrails_by_type": {
+      "policy": null,
+      "cost": null,
+      "resource": null,
+      "tag": null
+    },
+    "ci_workspaces": null,
+    "runner_projects": null,
+    "runner_workspaces": null,
+    "note": ""
+  },
+  "integrations": {
+    "aws": null,
+    "azurerm": null,
+    "gcp": null,
+    "k8s": null,
+    "notes": {}
+  },
+  "adoption": {
+    "weekly_activities": null,
+    "weekly_active_users": null,
+    "scopes_touched": null,
+    "top_scope": null,
+    "top_scope_count": null,
+    "audit_failures": null,
+    "users": [
+      {
+        "email": "",
+        "count": 0
+      }
+    ],
+    "scopes": [
+      {
+        "scope": "",
+        "count": 0
+      }
+    ],
+    "note": ""
+  },
+  "events": {
+    "total": null,
+    "click_ops": null,
+    "cli_sdk": null,
+    "denied": null,
+    "workspace_run": null,
+    "by_action": {},
+    "note": ""
+  },
+  "notes": ""
+}

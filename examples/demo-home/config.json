@@ -1,0 +1,20 @@
+{
+  "account_name": "Example Corp",
+  "account_id": "000000000000000000000000",
+  "mcp_server": "firefly",
+  "providers": [
+    "aws",
+    "azurerm",
+    "gcp",
+    "k8s"
+  ],
+  "runner_enabled": true,
+  "hidden_metrics": [],
+  "copy_to": null,
+  "schedule": {
+    "enabled": false,
+    "weekday": 1,
+    "hour": 7,
+    "minute": 0
+  }
+}

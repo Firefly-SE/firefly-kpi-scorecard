@@ -1,0 +1,9 @@
+# Live Firefly API credentials: never commit
+.mcp.json
+
+# One checkout = one account. Config, snapshots, reports and logs are local data.
+# (To keep snapshot history in git, delete this line and use a PRIVATE repo.)
+data/
+
+.DS_Store
+__pycache__/

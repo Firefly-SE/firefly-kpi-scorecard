@@ -1,0 +1,13 @@
+{
+  "coverage_pct": 75,
+  "ghost_ratio": 15,
+  "drift_rate": 0.1,
+  "cis": 90,
+  "nist": 90,
+  "hipaa": 95,
+  "wau": 20,
+  "guardrails": 10,
+  "guardrail_types": 4,
+  "unmanaged": 20000,
+  "runner_workspaces": 3
+}

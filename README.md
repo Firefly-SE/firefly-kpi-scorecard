@@ -4,6 +4,10 @@ Collects a weekly snapshot of one Firefly account's health and turns the history
 IaC coverage, drift, ghost assets, posture scores, guardrails, workspaces and adoption, each with
 week-over-week change, a trend line and a status against your own targets.
 
+![Example scorecard](docs/scorecard-example.png)
+
+*The scorecard, built from the synthetic data in `examples/demo-home`. Each tile shows the value, change since the last week with data, a trend line and your target; the info icon on a tile explains the metric. The full page continues with a watchlist, who is using the platform, and measurement caveats.*
+
 You get, after every run:
 
 | File (in `data/reports/`) | Use |

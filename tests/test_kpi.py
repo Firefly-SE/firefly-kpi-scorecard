@@ -74,8 +74,7 @@ class TestReports(Base):
             self.assertIn("not for account_id", r.stderr)
 
     def test_unspecified_account_id_is_not_shown(self):
-        for w in ("2026-W01", "2026-W02"):
-            p = self.home / "snapshots" / f"{w}.json"
+        for p in (self.home / "snapshots").glob("*.json"):
             s = json.loads(p.read_text())
             s["account_id"] = "unspecified"
             p.write_text(json.dumps(s))
@@ -191,7 +190,8 @@ class TestNoAccountSpecificStrings(unittest.TestCase):
         files = [p for p in REPO.rglob("*") if p.is_file()
                  and not any(part in (".git", "data", "__pycache__") for part in p.parts)
                  and p.resolve() != pathlib.Path(__file__).resolve()
-                 and p.name != ".mcp.json"]
+                 and p.name != ".mcp.json"
+                 and p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif")]  # binary: random bytes can match
         self.assertTrue(files)
         hits = []
         for p in files:

@@ -7,3 +7,6 @@ data/
 
 .DS_Store
 __pycache__/
+
+# Reports built from the demo data are generated, not tracked
+examples/**/reports/

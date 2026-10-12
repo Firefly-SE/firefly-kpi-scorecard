@@ -1,0 +1,110 @@
+{
+  "week": "2025-W51",
+  "collected_at": "2025-12-22",
+  "account_id": "000000000000000000000000",
+  "account_name": "Example Corp",
+  "window": {
+    "start": "2025-12-15",
+    "end": "2025-12-22"
+  },
+  "inventory": {
+    "codified": 47200,
+    "unmanaged": 19100,
+    "ghost": 9600,
+    "drifted": 160
+  },
+  "iac_estate": {
+    "stacks_total": 1200,
+    "stacks_terraform": 900
+  },
+  "governance": {
+    "frameworks": {
+      "CIS": 79,
+      "NIST": 77,
+      "HIPAA": 97,
+      "SOC2": null,
+      "ISO27001": null,
+      "PCI-DSS": null,
+      "GDPR": null,
+      "AWS Well-Architected": null,
+      "FireflyBestPractices": null
+    },
+    "policies_total": 400,
+    "policies_enabled": 380,
+    "policies_custom": 2
+  },
+  "automation": {
+    "guardrails_total": 4,
+    "guardrails_enabled": 4,
+    "guardrails_by_type": {
+      "policy": 1,
+      "cost": 1,
+      "resource": 0,
+      "tag": 2
+    },
+    "ci_workspaces": 4,
+    "runner_projects": 2,
+    "runner_workspaces": 4,
+    "note": ""
+  },
+  "integrations": {
+    "aws": 5,
+    "azurerm": null,
+    "gcp": 3,
+    "k8s": 0,
+    "notes": {
+      "azurerm": "Synthetic example: the call failed, so this reads as no data, not 0."
+    }
+  },
+  "adoption": {
+    "weekly_activities": 350,
+    "weekly_active_users": 7,
+    "scopes_touched": 9,
+    "top_scope": "Governance",
+    "top_scope_count": 126,
+    "audit_failures": 0,
+    "users": [
+      {
+        "email": "alex@example.com",
+        "count": 140
+      },
+      {
+        "email": "sam@example.com",
+        "count": 105
+      },
+      {
+        "email": "jo@example.com",
+        "count": 105
+      }
+    ],
+    "scopes": [
+      {
+        "scope": "Governance",
+        "count": 126
+      },
+      {
+        "scope": "Inventory",
+        "count": 105
+      },
+      {
+        "scope": "Runner",
+        "count": 70
+      }
+    ],
+    "note": ""
+  },
+  "events": {
+    "total": 50000,
+    "click_ops": 120,
+    "cli_sdk": 49000,
+    "denied": 3,
+    "workspace_run": 10,
+    "by_action": {
+      "Create": 300,
+      "Update": 500,
+      "Delete": 200
+    },
+    "note": ""
+  },
+  "notes": ""
+}

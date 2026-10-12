@@ -164,6 +164,25 @@ class TestSetup(Base):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(json.loads((home / "config.json").read_text())["account_id"], "")
 
+    def test_existing_server_needs_no_keys_and_writes_no_mcp_json(self):
+        home = self.tmp / "fresh"
+        mcp = self.tmp / "mcp.json"
+        af = self.tmp / "a.json"
+        af.write_text(json.dumps({"account_name": "Acme", "existing_server": True, "mcp_server": "my-firefly",
+                                  "targets_mode": "1"}))
+        r = run("setup.py", home, "--answers", str(af), "--skip-check", env={"KPI_MCP_JSON": str(mcp)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        cfg = json.loads((home / "config.json").read_text())
+        self.assertEqual((cfg["mcp_server"], cfg["mcp_mode"]), ("my-firefly", "existing"))
+        self.assertFalse(mcp.exists())
+
+    def test_default_mode_is_project_scoped_keys(self):
+        home = self.tmp / "fresh"
+        af = self.tmp / "a.json"
+        af.write_text(json.dumps({"account_name": "Acme", "access_key": "AK", "secret_key": "SK", "targets_mode": "1"}))
+        run("setup.py", home, "--answers", str(af), "--skip-check", env={"KPI_MCP_JSON": str(self.tmp / "m.json")}, check=True)
+        self.assertEqual(json.loads((home / "config.json").read_text())["mcp_mode"], "project")
+
     def test_rerun_keeps_existing_values(self):
         home = self.tmp / "fresh"
         mcp = self.tmp / "mcp.json"

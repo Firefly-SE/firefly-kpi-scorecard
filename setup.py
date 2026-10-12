@@ -254,28 +254,39 @@ def main():
         say("  note: Firefly account IDs are normally 24 hex characters. Double-check this one.")
 
     # -- MCP server + credentials -----------------------------------------
-    server = p.ask("mcp_server", "Name for the Firefly MCP server in Claude Code", old.get("mcp_server", "firefly"),
-                   check=lambda v: None if re.fullmatch(r"[A-Za-z0-9_-]+", v) else "Use letters, digits, - and _ only")
-    mcp = load_json(MCP_JSON, {})
-    have_creds = server in (mcp.get("mcpServers") or {})
-    if have_creds and not p.yes("replace_credentials", f"\n.mcp.json already has credentials for '{server}'. Replace them?", False):
-        say("  keeping existing credentials")
+    existing = p.yes("existing_server",
+                     "Is a Firefly MCP server already configured in Claude Code (see `claude mcp list`)?",
+                     old.get("mcp_mode") == "existing")
+    if existing:
+        server = p.ask("mcp_server", "Name of that server, exactly as `claude mcp list` shows it",
+                       old.get("mcp_server") or "firefly",
+                       check=lambda v: None if re.fullmatch(r"[A-Za-z0-9_-]+", v) else "Use letters, digits, - and _ only")
+        say(f"  using the existing '{server}' server; no keys will be asked for and .mcp.json is not touched.")
+        say("  Its key needs read access to every project you want counted, or workspace counts read low.")
     else:
-        say("\nCreate an API key pair in the Firefly web console (Settings > Users > Create Key Pair).")
-        say("The secret key is shown only once, so copy both now.")
-        access = p.ask("access_key", "Access key", os.environ.get("FIREFLY_ACCESS_KEY"), required=True)
-        secret = p.ask("secret_key", "Secret key (input hidden)", os.environ.get("FIREFLY_SECRET_KEY"),
-                       secret=True, required=True)
-        write_mcp_json(server, access, secret)
-        say("  wrote .mcp.json (mode 600, gitignored)")
-        if not args.skip_check:
-            ok, msg = check_credentials(access, secret)
-            if ok:
-                say(f"  credential check: ok ({msg})")
-            elif ok is False:
-                say(f"  credential check FAILED: {msg}. Fix the keys and re-run setup.")
-            else:
-                say(f"  credential check inconclusive: {msg}")
+        server = p.ask("mcp_server", "Name to give the Firefly MCP server in Claude Code", old.get("mcp_server") or "firefly",
+                       check=lambda v: None if re.fullmatch(r"[A-Za-z0-9_-]+", v) else "Use letters, digits, - and _ only")
+        mcp = load_json(MCP_JSON, {})
+        have_creds = server in (mcp.get("mcpServers") or {})
+        if have_creds and not p.yes("replace_credentials", f"\n.mcp.json already has credentials for '{server}'. Replace them?", False):
+            say("  keeping existing credentials")
+        else:
+            say("\nPaste an existing Firefly API key pair, or create one in the web console")
+            say("(Settings > Users > Create Key Pair). The secret key is shown only once, so if you no")
+            say("longer have it for an existing pair, create a new pair.")
+            access = p.ask("access_key", "Access key", os.environ.get("FIREFLY_ACCESS_KEY"), required=True)
+            secret = p.ask("secret_key", "Secret key (input hidden)", os.environ.get("FIREFLY_SECRET_KEY"),
+                           secret=True, required=True)
+            write_mcp_json(server, access, secret)
+            say("  wrote .mcp.json (mode 600, gitignored)")
+            if not args.skip_check:
+                ok, msg = check_credentials(access, secret)
+                if ok:
+                    say(f"  credential check: ok ({msg})")
+                elif ok is False:
+                    say(f"  credential check FAILED: {msg}. Fix the keys and re-run setup.")
+                else:
+                    say(f"  credential check inconclusive: {msg}")
 
     # -- scope ---------------------------------------------------------------
     say("\nWhich cloud providers does this account have integrations for?")
@@ -316,6 +327,7 @@ def main():
     # -- write ---------------------------------------------------------------
     cfg = {
         "account_name": name, "account_id": acct, "mcp_server": server,
+        "mcp_mode": "existing" if existing else "project",
         "providers": provs, "runner_enabled": runner, "hidden_metrics": hidden,
         "claude_bin": claude_bin, "copy_to": copy_to or None, "schedule": sched,
     }

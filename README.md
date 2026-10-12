@@ -63,8 +63,9 @@ Then open `data/reports/firefly-kpi-scorecard.html`.
 |---|---|
 | Account name | shown at the top of the report |
 | More than one account? | answer no if this install is for your own Firefly account. Answer yes (SEs, consultants) to enter the account ID, shown in Firefly under Integrations > Connected integrations; snapshots from any other account are then refused |
-| MCP server name | default `firefly`; the name Claude Code uses for the Firefly connection |
-| Access key / secret key | secret is hidden; stored only in `.mcp.json` (mode 600, gitignored). Setup tests the keys against the API and says if they are rejected |
+| Existing Firefly MCP server? | answer yes if `claude mcp list` already shows a Firefly server you want to use. You then give its name and no keys are asked for or stored by this tool |
+| MCP server name | otherwise: default `firefly`; the name Claude Code will use for the connection |
+| Access key / secret key | paste an existing pair or create one (the secret is shown only once, so a lost secret means a new pair). The secret is hidden as you type and stored only in this project's `.mcp.json` (mode 600, gitignored). Setup tests the keys against the API and says if they are rejected |
 | Providers | which of AWS, Azure, GCP, Kubernetes to count integrations for |
 | Uses Runners? | answer no to hide the Runner workspaces KPI |
 | Targets | suggested defaults, none, or set each one. Counts that depend on estate size (unmanaged, drifted, workspaces) are never defaulted |
@@ -74,7 +75,7 @@ Then open `data/reports/firefly-kpi-scorecard.html`.
 Re-run `python3 setup.py` any time. Existing answers are offered as defaults and nothing is deleted.
 
 **Unattended setup** (for scripting): `python3 setup.py --answers answers.json` with keys
-`account_name`, `account_id`, `access_key`, `secret_key`, `mcp_server`, `targets_mode` (1/2/3),
+`account_name`, `account_id`, `existing_server` (true to skip keys), `access_key`, `secret_key`, `mcp_server`, `targets_mode` (1/2/3),
 `provider_aws`, `provider_azurerm`, `provider_gcp`, `provider_k8s`, `runner_enabled`, `copy_to`,
 `schedule`. `--skip-check` skips the credential test.
 

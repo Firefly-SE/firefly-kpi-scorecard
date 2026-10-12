@@ -34,7 +34,7 @@ KPI definitions and data-source notes are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.
 - **Claude Code** (the `claude` CLI), signed in. Collection is done by Claude following the skill, so
   this is required for the weekly run. (Building reports from existing snapshots needs only Python.)
 - **Python 3.8+**. No packages to install.
-- **Firefly API keys**: an access key and a secret key, created in the Firefly web console under Settings > Users > Create Key Pair (the secret is shown only once). Read access is enough. Your **Firefly account ID** is needed only if you run this against several accounts.
+- **Firefly API keys**: an access key and a secret key, created in the Firefly web console under Settings > Users > User API Keys (the secret is shown only once). Read access is enough. Your **Firefly account ID** is needed only if you run this against several accounts.
 - macOS or Linux. Setup can install a weekly schedule on macOS; Linux uses a cron line it prints.
 
 ## Quick start

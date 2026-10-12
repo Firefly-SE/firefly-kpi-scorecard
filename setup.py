@@ -272,7 +272,7 @@ def main():
             say("  keeping existing credentials")
         else:
             say("\nPaste an existing Firefly API key pair, or create one in the web console")
-            say("(Settings > Users > Create Key Pair). The secret key is shown only once, so if you no")
+            say("(Settings > Users > User API Keys). The secret key is shown only once, so if you no")
             say("longer have it for an existing pair, create a new pair.")
             access = p.ask("access_key", "Access key", os.environ.get("FIREFLY_ACCESS_KEY"), required=True)
             secret = p.ask("secret_key", "Secret key (input hidden)", os.environ.get("FIREFLY_SECRET_KEY"),

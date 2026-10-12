@@ -40,7 +40,7 @@ KPI definitions and data-source notes are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.
 ## Quick start
 
 ```bash
-git clone <this repo> ~/code/firefly-kpi-scorecard
+git clone https://github.com/Firefly-SE/firefly-kpi-scorecard.git ~/code/firefly-kpi-scorecard
 cd ~/code/firefly-kpi-scorecard
 
 # Optional: see what a report looks like first, using synthetic data

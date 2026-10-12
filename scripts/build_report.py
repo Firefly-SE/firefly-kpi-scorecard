@@ -12,6 +12,7 @@ Per-account settings come from <home>/config.json, <home>/targets.json and
 Stdlib only. A metric that is absent or null renders as "no data", never 0.
 """
 
+import datetime
 import json
 import os
 import pathlib
@@ -219,6 +220,40 @@ _CATALOG = [
 
 KPI_KEYS = [m[0] for _, _, ms in _CATALOG for m in ms]
 
+# Tooltip text per KPI, shown on the tile's info icon. Mirrors KPI-FRAMEWORK.md:
+# change the definition there first, then update it here.
+METRIC_HELP = {
+    "coverage_pct": "(codified + drifted) / (codified + drifted + unmanaged). Ghosts are excluded because they no longer exist in the cloud. Treat as a floor: repo-scoped attribution can read low.",
+    "total_assets": "Codified + unmanaged + ghost + drifted. Tracked, not targeted.",
+    "codified": "Assets in the cloud that are managed by IaC.",
+    "unmanaged": "Assets that exist in the cloud but are absent from IaC.",
+    "ghost": "Assets recorded in IaC state that no longer exist in the cloud.",
+    "ghost_ratio": "ghost / (codified + drifted). A high value means state files outlive the resources they describe, or crawlers are reading stale backends.",
+    "drifted": "Assets in both the cloud and IaC whose configuration has diverged.",
+    "drift_rate": "drifted / (codified + drifted).",
+    "accounts_connected": "Active integrations summed across the configured providers. A provider that failed to collect is left out, so read this as a floor.",
+    "stacks_total": "IaC state files Firefly has discovered, across all backends.",
+    "stacks_terraform": "Discovered stacks with stateType = terraform.",
+    "stacks_other": "Total stacks minus Terraform: Pulumi, CloudFormation, Helm, Kubernetes, OpenTofu.",
+    "cis": "CIS posture score, 0-100. Shows 'no data' when the framework has no subscribed policies; that is not a zero.",
+    "nist": "NIST posture score, 0-100. Shows 'no data' when the framework has no subscribed policies; that is not a zero.",
+    "hipaa": "HIPAA posture score, 0-100. Shows 'no data' when the framework has no subscribed policies; that is not a zero.",
+    "frameworks_scored": "Frameworks that returned a non-null score. A null score means no subscribed policies, not a failing grade.",
+    "policies_total": "All OPA policy insights available in the account.",
+    "policies_custom": "Policies authored by the account, as opposed to Firefly defaults.",
+    "guardrails": "Total guardrail rules configured. Zero guardrails means Firefly is observing only, so everything above is detection after the fact.",
+    "guardrail_types": "Distinct guardrail types in use, out of policy, cost, resource and tag.",
+    "ci_workspaces": "Pipelines reporting into Firefly. This is a count, not a measure of workspace health. A count of exactly 100 may be a page-size floor.",
+    "runner_workspaces": "Firefly-native IaC workspaces: the sum of workspaceCount across the whole project tree, not just the root. A key that cannot see the projects reads low.",
+    "wau": "Distinct human users with audit-log activity in the trailing 7 days.",
+    "activities": "User-attributed audit-log events in the trailing 7 days.",
+    "scopes_touched": "Distinct product areas (audit-log scopes) touched in the trailing 7 days.",
+    "top_scope_share": "The largest scope's share of all activity. Lower means usage is spread across more features.",
+    "top_user_share": "The largest single user's share of all activity. High means key-person risk.",
+    "click_ops": "Events where infrastructure was changed from the cloud console, bypassing IaC. Track the absolute count, not a share of total events.",
+    "denied": "Events that were blocked.",
+}
+
 
 def catalog():
     """The KPI catalog with this account's targets applied and hidden metrics removed.
@@ -262,12 +297,45 @@ def status(val, direction, target):
     return "off" if val > target * 1.6 else "watch"
 
 
-def delta_chip(cur, prev, unit, direction):
-    if cur is None or prev is None:
+MAX_LOOKBACK_WEEKS = 4
+
+
+def _iso_monday(week):
+    y, w = week.split("-W")
+    return datetime.date.fromisocalendar(int(y), int(w), 1)
+
+
+def comparison(key, derived, weeks):
+    """What the latest value of `key` is compared against.
+
+    Walks back to the most recent earlier snapshot that has a value for the metric
+    (a real measurement, never a carried-forward one), up to MAX_LOOKBACK_WEEKS ISO
+    weeks back. state: "ok" (value, week, gap in weeks), "baseline" (no earlier value
+    at all) or "stale" (earlier values exist, but all older than the cap).
+    """
+    for d, wk in zip(reversed(derived[:-1]), reversed(weeks[:-1])):
+        v = d.get(key)
+        if v is None:
+            continue
+        gap = max(1, (_iso_monday(weeks[-1]) - _iso_monday(wk)).days // 7)
+        if gap > MAX_LOOKBACK_WEEKS:
+            return {"state": "stale", "value": None, "week": wk, "gap": gap}
+        return {"state": "ok", "value": v, "week": wk, "gap": gap}
+    return {"state": "baseline", "value": None, "week": None, "gap": None}
+
+
+def delta_chip(cur, comp, unit, direction):
+    if cur is None:
+        return ""
+    if comp["state"] == "baseline":
         return '<span class="chip chip-flat">baseline</span>'
-    diff = cur - prev
+    if comp["state"] == "stale":
+        return (f'<span class="chip chip-flat" title="Last value was {comp["week"]}, '
+                f'more than {MAX_LOOKBACK_WEEKS} weeks ago">no recent data</span>')
+    vs = f" vs {comp['week'].split('-')[-1]}" if comp["gap"] > 1 else ""
+    diff = cur - comp["value"]
     if abs(diff) < 1e-9:
-        return '<span class="chip chip-flat">no change</span>'
+        return f'<span class="chip chip-flat">no change{vs}</span>'
     sign = "+" if diff > 0 else "−"
     mag = fmt(abs(diff), unit).replace("no data", "")
     if direction == "flat":
@@ -275,7 +343,7 @@ def delta_chip(cur, prev, unit, direction):
     else:
         good = diff > 0 if direction == "up" else diff < 0
         tone = "good" if good else "bad"
-    return f'<span class="chip chip-{tone}">{sign}{mag}</span>'
+    return f'<span class="chip chip-{tone}">{sign}{mag}{vs}</span>'
 
 
 def sparkline(series, direction):
@@ -305,14 +373,20 @@ def sparkline(series, direction):
     )
 
 
-def tile(key, label, unit, direction, target, note, cur, prev, history):
+def tile(key, label, unit, direction, target, note, cur, comp, history):
     val = cur.get(key)
     st = status(val, direction, target)
     tgt = f'<span class="tile-target">target {fmt(target, unit)}</span>' if target is not None else ""
+    help_text = METRIC_HELP.get(key)
+    info = (
+        f'<button type="button" class="tile-info" aria-label="About {_esc(label)}" '
+        f'aria-describedby="tip-{key}">i</button>'
+        f'<span class="tile-tip" role="tooltip" id="tip-{key}">{_esc(help_text)}</span>'
+    ) if help_text else ""
     return f"""      <div class="tile tile-{st}">
-        <div class="tile-head"><span class="tile-label">{label}</span>{sparkline(history, direction)}</div>
+        <div class="tile-head"><span class="tile-label">{label}{info}</span>{sparkline(history, direction)}</div>
         <div class="tile-value{' tile-value-empty' if val is None else ''}">{fmt(val, unit)}</div>
-        <div class="tile-foot">{delta_chip(val, prev.get(key) if prev else None, unit, direction)}{tgt}</div>
+        <div class="tile-foot">{delta_chip(val, comp, unit, direction)}{tgt}</div>
         <p class="tile-note">{note}</p>
       </div>"""
 
@@ -346,8 +420,9 @@ def composition_bar(cur):
     </div>"""
 
 
-def watchlist(cur, prev, pillars):
+def watchlist(derived, weeks, pillars):
     """Every off-target metric, worst first, with its delta — the action list."""
+    cur = derived[-1]
     rows = []
     for pillar, _, metrics in pillars:
         for key, label, unit, direction, target, _ in metrics:
@@ -362,7 +437,7 @@ def watchlist(cur, prev, pillars):
                 else:
                     gap = fmt(val - target, unit) + " over"
             rows.append((st, pillar, label, fmt(val, unit), fmt(target, unit), gap,
-                         delta_chip(val, prev.get(key) if prev else None, unit, direction)))
+                         delta_chip(val, comparison(key, derived, weeks), unit, direction)))
     rows.sort(key=lambda r: (r[0] != "off",))
     if not rows:
         return '<p class="empty">Every tracked KPI is at or above target.</p>'
@@ -394,7 +469,7 @@ def main():
     derived = [derive(s) for s in loaded]
 
     cur, latest = derived[-1], loaded[-1]
-    prev = derived[-2] if len(derived) > 1 else None
+    weeks = [s_["week"] for s_ in loaded]
     prev_week = loaded[-2]["week"] if len(loaded) > 1 else None
 
     def hist(key):
@@ -403,7 +478,7 @@ def main():
     bands = []
     for pillar, blurb, metrics in pillars:
         tiles = "\n".join(
-            tile(k, lbl, u, d, t, n, cur, prev, hist(k))
+            tile(k, lbl, u, d, t, n, cur, comparison(k, derived, weeks), hist(k))
             for k, lbl, u, d, t, n in metrics
         )
         bands.append(f"""  <section class="band">
@@ -450,13 +525,14 @@ def main():
     caveat_html = "".join(f"<li>{c}</li>" for c in caveats)
 
     cov = cur.get("coverage_pct")
-    cov_prev = prev.get("coverage_pct") if prev else None
-    cov_move = ""
-    if cov is not None and cov_prev is not None:
-        d = cov - cov_prev
+    cov_cmp = comparison("coverage_pct", derived, weeks)
+    if cov is not None and cov_cmp["state"] == "ok":
+        d = cov - cov_cmp["value"]
         tone = "good" if d > 0 else ("bad" if d < 0 else "flat")
         cov_move = (f'<span class="chip chip-{tone}">'
-                    f'{"+" if d > 0 else "−"}{abs(d):.2f} pt vs {prev_week}</span>')
+                    f'{"+" if d > 0 else "−"}{abs(d):.2f} pt vs {cov_cmp["week"]}</span>')
+    elif cov is not None and cov_cmp["state"] == "stale":
+        cov_move = '<span class="chip chip-flat">no recent data</span>'
     else:
         cov_move = '<span class="chip chip-flat">baseline week</span>'
 
@@ -567,6 +643,18 @@ h1,h2,h3 {{ font-family:Chivo,"IBM Plex Sans",sans-serif; text-wrap:balance; mar
 .tile-foot {{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }}
 .tile-target {{ font-family:"IBM Plex Mono",monospace; font-size:10.5px; color:var(--muted); }}
 .tile-note {{ margin:0; font-size:11.5px; color:var(--muted); line-height:1.4; }}
+.tile {{ position:relative; }}
+.tile:hover, .tile:focus-within {{ z-index:5; }}
+.tile-info {{ display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
+  margin-left:6px; padding:0; border:1px solid var(--muted); border-radius:50%; background:none;
+  color:var(--muted); font:italic 700 9px/1 Georgia,serif; text-transform:none; letter-spacing:0;
+  cursor:help; vertical-align:1px; }}
+.tile-info:hover, .tile-info:focus-visible {{ color:var(--ink); border-color:var(--ink); outline:none; }}
+.tile-tip {{ display:none; position:absolute; left:8px; right:8px; top:38px; z-index:10;
+  padding:9px 11px; background:var(--panel); color:var(--ink); border:1px solid var(--muted);
+  border-radius:3px; box-shadow:0 4px 14px rgba(0,0,0,.18); font-family:Chivo,sans-serif;
+  font-size:12px; font-weight:400; letter-spacing:0; text-transform:none; line-height:1.45; }}
+.tile-info:hover + .tile-tip, .tile-info:focus + .tile-tip {{ display:block; }}
 
 .chip {{ font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
   padding:2px 6px; border-radius:2px; white-space:nowrap; font-variant-numeric:tabular-nums; }}
@@ -662,7 +750,7 @@ a {{ color:var(--accent); }}
     <h2>Watchlist</h2>
     <p class="lede">Every KPI currently short of its target, worst first. This is the working
     agenda — anything not on this list is holding.</p>
-{watchlist(cur, prev, pillars)}
+{watchlist(derived, weeks, pillars)}
   </section>
 
   <section class="section">

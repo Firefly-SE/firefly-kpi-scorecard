@@ -17,8 +17,8 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from build_report import (ROOT, catalog, derive, load_snapshots,  # noqa: E402
-                          standing_caveats, status)
+from build_report import (ROOT, catalog, comparison, derive,  # noqa: E402
+                          load_snapshots, standing_caveats, status)
 
 OUT_CSV = ROOT / "reports" / "kpi-metrics.csv"
 OUT_JSON = ROOT / "reports" / "kpi-metrics.json"
@@ -46,13 +46,14 @@ def md_delta(row, unit):
     d = row["delta"]
     if d is None:
         return "—"
+    vs = f" vs {row['delta_vs'].split('-')[-1]}" if row.get("delta_vs") and row["delta_gap"] > 1 else ""
     if d == 0:
-        return "no change"
+        return "no change" + vs
     sign = "+" if d > 0 else "−"
     mag = f"{abs(d):,.2f} pt" if unit == "percent" else f"{abs(d):,.0f}"
     pc = row["pct_change"]
     tail = f" ({sign}{abs(pc):.1f}%)" if pc not in (None, 0) and unit != "percent" else ""
-    return f"{sign}{mag}{tail}"
+    return f"{sign}{mag}{tail}{vs}"
 
 
 def write_markdown(snaps, weeks, rows, pillars):
@@ -180,7 +181,9 @@ def main():
     for pillar, _, metrics in pillars:
         for key, label, unit, direction, target, note in metrics:
             vals = [d.get(key) for d in derived]
-            cur, prev = vals[-1], (vals[-2] if len(vals) > 1 else None)
+            cur = vals[-1]
+            comp = comparison(key, derived, weeks)
+            prev = comp["value"]
 
             delta = None if cur is None or prev is None else round(cur - prev, 4)
             if cur is None or prev in (None, 0):
@@ -207,10 +210,13 @@ def main():
                 "movement": movement,
                 "vs_target": status(cur, direction, target),
                 "definition": note,
+                "delta_vs": comp["week"] if comp["state"] == "ok" else "",
+                "delta_gap": comp["gap"] if comp["state"] == "ok" else None,
             })
 
     fields = (["pillar", "metric", "key", "unit", "target", "good_direction"]
-              + weeks + ["delta", "pct_change", "movement", "vs_target", "definition"])
+              + weeks + ["delta", "pct_change", "movement", "vs_target", "definition",
+                "delta_vs"])
 
     OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
     with OUT_CSV.open("w", newline="") as fh:

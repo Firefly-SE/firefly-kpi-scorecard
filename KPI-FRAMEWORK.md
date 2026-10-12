@@ -127,7 +127,11 @@ checks.
 
 1. **Never invent a number.** A metric that failed to collect is `null` and renders as "no data",
    never 0, and is never carried forward from a previous week.
-2. **Deltas are week-over-week** against the previous snapshot on file. The first snapshot has no deltas.
+2. **Deltas are week-over-week**, against the previous snapshot on file. If a metric has no value
+   in that snapshot, the delta falls back to the most recent earlier snapshot that has one, up to
+   4 ISO weeks back, and the report labels it (for example `+1,200 vs W40`). Beyond 4 weeks it reads
+   "no recent data". A metric with no earlier value at all reads "baseline". Only real measurements
+   are compared; nothing is carried forward into a snapshot.
 3. **A metric with a caveat carries the caveat into the report.** No silently misleading ratios.
 4. **Snapshots are per week and per account.** `snapshots/YYYY-Www.json`; the builders refuse to
    compute deltas if a snapshot's `account_id` differs from `data/config.json`.

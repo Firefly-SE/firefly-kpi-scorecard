@@ -30,7 +30,7 @@ KPI definitions and data-source notes are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.
 - **Claude Code** (the `claude` CLI), signed in. Collection is done by Claude following the skill, so
   this is required for the weekly run. (Building reports from existing snapshots needs only Python.)
 - **Python 3.8+**. No packages to install.
-- **Firefly API keys** (an access key and a secret key) with read access, and your **Firefly account ID**.
+- **Firefly API keys**: an access key and a secret key, created in the Firefly web console under Settings > Users > Create Key Pair (the secret is shown only once). Read access is enough. Your **Firefly account ID** is needed only if you run this against several accounts.
 - macOS or Linux. Setup can install a weekly schedule on macOS; Linux uses a cron line it prints.
 
 ## Quick start
@@ -58,7 +58,7 @@ Then open `data/reports/firefly-kpi-scorecard.html`.
 | Prompt | Notes |
 |---|---|
 | Account name | shown at the top of the report |
-| Firefly account ID | used to refuse snapshots from another account |
+| More than one account? | answer no if this install is for your own Firefly account. Answer yes (SEs, consultants) to enter the account ID, shown in Firefly under Integrations > Connected integrations; snapshots from any other account are then refused |
 | MCP server name | default `firefly`; the name Claude Code uses for the Firefly connection |
 | Access key / secret key | secret is hidden; stored only in `.mcp.json` (mode 600, gitignored). Setup tests the keys against the API and says if they are rejected |
 | Providers | which of AWS, Azure, GCP, Kubernetes to count integrations for |
@@ -125,7 +125,7 @@ These exist because a wrong number on a scorecard does more harm than a missing 
 - **"No data", never 0.** A metric that failed to collect is `null` and renders as "no data". It is
   never zero and never carried forward from last week.
 - **One account per install.** Builders refuse to run if a snapshot's `account_id` differs from
-  `config.json`, so deltas can't mix accounts.
+  `config.json` (or, with no ID configured, if snapshots disagree with each other), so deltas can't mix accounts.
 - **Validation.** `scripts/validate_snapshot.py` rejects missing fields and wrong account IDs, and warns
   on a suspicious zero or on workspace counts that fall by more than half week-over-week. A big drop
   more often means the API key can only see part of the project tree than that workspaces vanished.

@@ -110,7 +110,7 @@ projects that hold the workspaces reads a low number, with no error. So:
 ## Step 2: write the snapshot
 
 Write `data/snapshots/<week>.json` matching `templates/snapshot.template.json` exactly; the
-report builder reads those key paths. Fill `account_id` and `account_name` from `config.json`.
+report builder reads those key paths. Fill `account_id` and `account_name` from `config.json`. If `account_id` is blank there, write the string `"unspecified"`; never guess an ID.
 Keep the `notes`, `events.note` and `integrations.notes` fields: they render as caveats.
 
 Then validate. Do not continue past an `ERROR`:

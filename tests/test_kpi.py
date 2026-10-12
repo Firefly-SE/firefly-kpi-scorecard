@@ -73,6 +73,20 @@ class TestReports(Base):
             self.assertNotEqual(r.returncode, 0, script)
             self.assertIn("not for account_id", r.stderr)
 
+    def test_unspecified_account_id_is_not_shown(self):
+        for w in ("2026-W01", "2026-W02"):
+            p = self.home / "snapshots" / f"{w}.json"
+            s = json.loads(p.read_text())
+            s["account_id"] = "unspecified"
+            p.write_text(json.dumps(s))
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["account_id"] = ""
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        self.assertEqual(run("scripts/build_report.py", self.home).returncode, 0)
+        self.assertNotIn("unspecified", self.html())
+        self.assertEqual(run("scripts/export_metrics.py", self.home).returncode, 0)
+        self.assertNotIn("unspecified", (self.home / "reports" / "kpi-metrics.md").read_text())
+
     def test_user_strings_are_escaped(self):
         p = self.home / "snapshots" / "2026-W02.json"
         s = json.loads(p.read_text())
@@ -142,6 +156,14 @@ class TestSetup(Base):
         self.assertEqual(m["mcpServers"]["acme-firefly"]["headers"]["X-secret-Key"], "SK")
         self.assertEqual(oct(mcp.stat().st_mode & 0o777), "0o600")
         self.assertTrue((home / "caveats.md").exists())
+
+    def test_account_id_is_optional(self):
+        home = self.tmp / "fresh"
+        af = self.tmp / "a.json"
+        af.write_text(json.dumps({"account_name": "Acme", "access_key": "AK", "secret_key": "SK"}))
+        r = run("setup.py", home, "--answers", str(af), "--skip-check", env={"KPI_MCP_JSON": str(self.tmp / "m.json")})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads((home / "config.json").read_text())["account_id"], "")
 
     def test_rerun_keeps_existing_values(self):
         home = self.tmp / "fresh"

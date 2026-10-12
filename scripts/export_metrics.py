@@ -63,7 +63,8 @@ def write_markdown(snaps, weeks, rows, pillars):
     L = []
     L.append(f"# Firefly KPI report — {cur.get('account_name')}")
     L.append("")
-    L.append(f"**Account** `{cur.get('account_id')}`  ")
+    if cur.get("account_id") not in (None, "", "unspecified"):
+        L.append(f"**Account** `{cur.get('account_id')}`  ")
     L.append(f"**Comparison** {wa} → {wb}" if wa else f"**Week** {wb}")
     L.append("  ")
     for s_ in snaps:

@@ -464,6 +464,9 @@ def main():
                 else "Baseline week — deltas begin next collection")
 
     name = _esc(str(latest.get("account_name") or "Account"))
+    aid = latest.get("account_id")
+    account_line = (f"account {_esc(str(aid))}<br>\n      "
+                    if aid and aid != "unspecified" else "")
     html = f"""<title>{name} — Firefly KPI scorecard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -639,7 +642,7 @@ a {{ color:var(--accent); }}
     <div class="stamp">
       <b>{latest['week']}</b>
       collected {latest['collected_at']}<br>
-      account {_esc(str(latest.get('account_id', '')))}<br>
+      {account_line}
       {len(loaded)} snapshot{'s' if len(loaded) != 1 else ''} on file
     </div>
   </header>

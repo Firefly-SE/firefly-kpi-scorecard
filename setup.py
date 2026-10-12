@@ -241,9 +241,16 @@ def main():
 
     # -- account -----------------------------------------------------------
     name = p.ask("account_name", "Account name (shown on the report)", old.get("account_name"), required=True)
-    acct = p.ask("account_id", "Firefly account ID (Firefly > Settings > Account)", old.get("account_id"), required=True,
-                 check=lambda v: "No spaces allowed" if re.search(r"\s", v) else None)
-    if not re.fullmatch(r"[0-9a-f]{24}", acct):
+    # Only needed by someone running this against several Firefly accounts (an SE, a consultant):
+    # it stops snapshots from one account being mixed into another's history.
+    acct = ""
+    multi = p.yes("multi_account", "Do you run this against more than one Firefly account (e.g. as an SE or consultant)?",
+                  bool(old.get("account_id")) or (not p.interactive and "account_id" in p.answers))
+    if multi:
+        acct = p.ask("account_id", "Firefly account ID (Integrations > Connected integrations, under the page title)",
+                     old.get("account_id"), required=True,
+                     check=lambda v: "No spaces allowed" if re.search(r"\s", v) else None)
+    if acct and not re.fullmatch(r"[0-9a-f]{24}", acct):
         say("  note: Firefly account IDs are normally 24 hex characters. Double-check this one.")
 
     # -- MCP server + credentials -----------------------------------------
@@ -254,7 +261,8 @@ def main():
     if have_creds and not p.yes("replace_credentials", f"\n.mcp.json already has credentials for '{server}'. Replace them?", False):
         say("  keeping existing credentials")
     else:
-        say("\nCreate an API key pair in Firefly (Settings > API Keys) with read access.")
+        say("\nCreate an API key pair in the Firefly web console (Settings > Users > Create Key Pair).")
+        say("The secret key is shown only once, so copy both now.")
         access = p.ask("access_key", "Access key", os.environ.get("FIREFLY_ACCESS_KEY"), required=True)
         secret = p.ask("secret_key", "Secret key (input hidden)", os.environ.get("FIREFLY_SECRET_KEY"),
                        secret=True, required=True)

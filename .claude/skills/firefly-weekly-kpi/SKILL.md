@@ -101,12 +101,20 @@ of your own, and never describe them as actual spend.
   **each rounded to 2 places before summing** (the UI rounds per row; summing first can be a cent
   off). Treat a missing `costDelta` as 0. Negative values are excluded, not netted. Do not filter by policy through
   this tool; it ignores that filter.
-- `leakage.assets` should equal `iacCoverage.drifted` from call 1. If they differ, say so in
-  `cloud_waste.note`.
+- `leakage.assets` should equal `iacCoverage.drifted` from call 1. If they differ, add a sentence
+  saying so to `cloud_waste.caveats`. If they match, write nothing.
 
-**Failures.** A failed call leaves its fields `null` with a note in `cloud_waste.note`. If call 15
+**Failures.** A failed call leaves its fields `null`; the report adds its own "not collected" line,
+so write no note for it. If call 15
 fails, `policies`, `monthly_usd` and `violating_assets` are all `null`. An empty policy list that
 came from a failed or empty response is a failure, not "no waste".
+
+**Notes versus caveats.** `cloud_waste.caveats` is a list of sentences a reader of the scorecard
+needs, and every entry is printed on the report. Leave it empty unless a number needs explaining.
+`cloud_waste.collector_note` is for process detail (page counts, what came back inline, how totals
+were computed) and is never shown. Do not write to `cloud_waste.note`: it is no longer rendered and
+the validator flags it. Test for a caveat: would someone reading the scorecard need this sentence?
+"13 policies fit one page" is a collector note.
 
 **The key's reach.** A key that cannot see every project returns low waste and leakage numbers
 with no error. If either falls by more than half against last week, the validator warns. That
@@ -153,7 +161,8 @@ projects that hold the workspaces reads a low number, with no error. So:
 
 Write `data/snapshots/<week>.json` matching `templates/snapshot.template.json` exactly; the
 report builder reads those key paths. Fill `account_id` and `account_name` from `config.json`. If `account_id` is blank there, write the string `"unspecified"`; never guess an ID.
-Keep the `notes`, `events.note` and `integrations.notes` fields: they render as caveats.
+Keep the `notes`, `events.note` and `integrations.notes` fields: they render as caveats, so write
+them for a reader of the scorecard, not as a log of what you did.
 
 Then validate. Do not continue past an `ERROR`:
 

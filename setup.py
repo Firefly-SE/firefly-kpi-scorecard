@@ -46,9 +46,11 @@ CAVEATS_TEMPLATE = """\
 Every line that starts with "- " is printed under "Measurement caveats" in every
 report. Use it for things a reader must know before quoting a number: known API
 limits, a team that is excluded, an integration that is not connected yet.
-Delete the example below.
 
-- Example: Azure integration counts may be capped by the API; treat them as a floor.
+A new account starts with none, so nothing prints until you add one. To use the
+example below, delete the leading "# " so the line starts with "- ".
+
+# - Azure integration counts may be capped by the API; treat them as a floor.
 """
 
 

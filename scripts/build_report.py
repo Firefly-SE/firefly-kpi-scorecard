@@ -308,6 +308,9 @@ CLOUD_WASTE_CAVEATS = [
     "Every dollar figure is list price, before discounts, commitments and credits.",
     "A key that cannot see all projects returns low numbers with no error. If waste or leakage "
     "drops sharply, check the collecting key's project membership before believing it.",
+    "Violating-asset counts are as Firefly's policy API reports them. It also reports an excluded "
+    "count per policy, and how Firefly's own views treat those assets is not established, so a "
+    "view in Firefly that applies exclusions may show fewer assets than the table does. "
     "A policy with no cost model has no cost field, so it adds nothing to the dollar totals. "
     "It is listed with its asset count and labelled \"no cost model\".",
     "Cost leakage counts two things: all drifted assets, and the subset with a positive cost "

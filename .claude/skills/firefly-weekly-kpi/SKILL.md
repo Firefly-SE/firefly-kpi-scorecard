@@ -72,7 +72,8 @@ exception and are described under the table.
 | 16 | `inventory-api___search-inventory` | `filters:{assetState:"modified", deleted:false}`, `source:["costDelta"]`, page with `afterKey`. **Use `"modified"`, never `"drifted"`.** | per asset: `costDelta` → `cloud_waste.leakage` |
 
 Providers **not** listed in `config.json` are written as `null` with no note: they were never in
-scope. If runner is disabled, write `runner_projects` and `runner_workspaces` as `null`.
+scope. If runner is disabled, write `runner_projects` and `runner_workspaces` as `null`. Count
+integration rows, and total any list you read, with a script, not by eye.
 
 ### Cloud Waste (calls 15 and 16)
 
@@ -81,7 +82,10 @@ of your own, and never describe them as actual spend.
 
 **Call 15, policies.**
 - `fields` returned zero hits with `frameworks` set, so leave it out. Each row carries base64 Rego,
-  so keep `page_size` at 20 and read results from the saved file with a script, not inline.
+  so keep `page_size` at 20. A large result is saved to a file: read it with a script, not inline.
+  A small one (about 13 policies fit one page) comes back inline and nothing is saved: copy only
+  `id`, `name`, `type`, `total_assets` and `cost` for each row into a scratch JSON file and total it
+  with a script. Do not add the figures up by eye.
 - `cost` is **absent**, not null or 0, when a policy has no cost model. Write that policy with
   `monthly_usd: null`. It still counts as a policy with its `total_assets`; it is not $0.
 - `type` is an array. Write `asset_type` as the entries joined with `", "`.

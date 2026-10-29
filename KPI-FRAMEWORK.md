@@ -137,6 +137,15 @@ change in underlying waste. The policy table marks new policies "new" and shows 
 this week's list muted as "no longer reported" with last week's figures. It is never labelled
 "resolved".
 
+**Known limits.** Not established, and the report does not claim otherwise:
+- What `excluded_assets`, returned per policy, means, and whether Firefly's own totals subtract it. In one
+  tenant some policies show every asset excluded, yet the table counts them as violating. The report carries a
+  caveat saying a view that applies exclusions may show fewer assets.
+- Whether `defaultView=false` is honoured on the leakage link.
+- Whether the Drift Cost Impact column on that page sorts.
+- How a negative `costDelta` should be treated: it is excluded here, and no tenant checked has one.
+- Whether the API de-duplicates an asset that violates two policies in the violating-assets total.
+
 **Notes versus caveats.** A snapshot's `cloud_waste` block has two text fields and the report prints only one.
 `caveats` is a list of sentences a reader of the scorecard needs, for example that leakage assets differ from
 the drifted count. `collector_note` is process detail (how the data was collected, page counts, what was

@@ -391,6 +391,13 @@ class TestCloudWaste(Base):
         self.assertNotIn("<script>x</script>", h)
         self.assertNotIn('id=a"b', h)
 
+    def test_excluded_assets_uncertainty_is_stated_to_the_reader(self):
+        run("scripts/build_report.py", self.home)
+        run("scripts/export_metrics.py", self.home)
+        md = (self.home / "reports" / "kpi-metrics.md").read_text()
+        for out in (self.html(), md):
+            self.assertIn("may show fewer assets than the table does", out)
+
     def test_exports_carry_dollars_and_caveats(self):
         run("scripts/build_report.py", self.home)
         self.assertEqual(run("scripts/export_metrics.py", self.home).returncode, 0)
@@ -477,6 +484,9 @@ class TestSetup(Base):
         self.assertEqual(m["mcpServers"]["acme-firefly"]["headers"]["X-secret-Key"], "SK")
         self.assertEqual(oct(mcp.stat().st_mode & 0o777), "0o600")
         self.assertTrue((home / "caveats.md").exists())
+        # No placeholder may print on a new account's customer report: only "- " lines are printed.
+        printed = [ln for ln in (home / "caveats.md").read_text().splitlines() if ln.startswith("- ")]
+        self.assertEqual(printed, [])
 
     def test_account_id_is_optional(self):
         home = self.tmp / "fresh"

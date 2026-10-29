@@ -106,5 +106,53 @@
     },
     "note": ""
   },
+  "cloud_waste": {
+    "monthly_usd": 1766.7,
+    "violating_assets": 55,
+    "policies": [
+      {
+        "id": "demo-policy-1",
+        "name": "Demo: unattached block volumes",
+        "asset_type": "aws_ebs_volume",
+        "total_assets": 40,
+        "monthly_usd": 412.5
+      },
+      {
+        "id": "demo-policy-2",
+        "name": "Demo: idle load balancers",
+        "asset_type": "aws_lb",
+        "total_assets": 6,
+        "monthly_usd": 135.0
+      },
+      {
+        "id": "demo-policy-3",
+        "name": "Demo: oversized database instances",
+        "asset_type": "aws_db_instance",
+        "total_assets": 3,
+        "monthly_usd": 960.0
+      },
+      {
+        "id": "demo-policy-4",
+        "name": "Demo: old machine images",
+        "asset_type": "aws_ami",
+        "total_assets": 210,
+        "monthly_usd": null
+      },
+      {
+        "id": "demo-policy-6",
+        "name": "Demo: idle NAT gateways",
+        "asset_type": "aws_nat_gateway",
+        "total_assets": 6,
+        "monthly_usd": 259.2
+      }
+    ],
+    "leakage": {
+      "assets": 140,
+      "costed_assets": 4,
+      "monthly_usd": 310.25
+    },
+    "caveats": [],
+    "collector_note": ""
+  },
   "notes": ""
 }

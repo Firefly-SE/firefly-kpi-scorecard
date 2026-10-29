@@ -48,8 +48,9 @@ This step must never block on a question; the weekly run is unattended.
 
 ## Step 1: collect
 
-Make these calls **in parallel batches**; they are independent. Every call is a count-only
-read: pass the smallest page size and read the total.
+Make these calls **in parallel batches**; they are independent. Calls 1-14 are count-only
+reads: pass the smallest page size and read the total. Calls 15 and 16 (Cloud Waste) are the
+exception and are described under the table.
 
 | # | Tool | Arguments | Read from response |
 |---|---|---|---|
@@ -67,9 +68,50 @@ read: pass the smallest page size and read the total.
 | 12 | `integrations-api___list-integrations` | once per `providerType` in `config.json` → `providers` (aws, azurerm, gcp, k8s) | row count per provider |
 | 13 | `auditLog-api___query-audit-log-activities` | `limit:5, actor_types:["user"], start_time:<start>T00:00:00Z, end_time:<today>T23:59:59Z` | `total`, `facets.actor_emails`, `facets.scopes` |
 | 14 | `events-api___query-events` | `size:1`, `query:{startTime,endTime}`, `facets:[{field:"eventType",size:20},{field:"actionType",size:10}]` | facet counts for `click_ops`, `cli_sdk`, `denied`, and actions |
+| 15 | `governance-api___get_insights` | `frameworks:["Cloud Waste"]`, `category:"Optimization"`, `onlyMatchingAssets:true`, `page:1`, `page_size:20`; page until rows collected equals `total`. **Do not pass `fields`.** | per row: `id`, `name`, `type`, `total_assets`, `cost` → `cloud_waste.policies` |
+| 16 | `inventory-api___search-inventory` | `filters:{assetState:"modified", deleted:false}`, `source:["costDelta"]`, page with `afterKey`. **Use `"modified"`, never `"drifted"`.** | per asset: `costDelta` → `cloud_waste.leakage` |
 
 Providers **not** listed in `config.json` are written as `null` with no note: they were never in
 scope. If runner is disabled, write `runner_projects` and `runner_workspaces` as `null`.
+
+### Cloud Waste (calls 15 and 16)
+
+All dollar figures are **list price** (monthly USD as returned by the API). Never apply a rate
+of your own, and never describe them as actual spend.
+
+**Call 15, policies.**
+- `fields` returned zero hits with `frameworks` set, so leave it out. Each row carries base64 Rego,
+  so keep `page_size` at 20 and read results from the saved file with a script, not inline.
+- `cost` is **absent**, not null or 0, when a policy has no cost model. Write that policy with
+  `monthly_usd: null`. It still counts as a policy with its `total_assets`; it is not $0.
+- `type` is an array. Write `asset_type` as the entries joined with `", "`.
+- `cloud_waste.monthly_usd` is the sum of `cost` over the policies that have one, rounded to
+  2 places. `cloud_waste.violating_assets` is the sum of `total_assets` over those same costed
+  policies only, so the count matches the dollars. The yearly figure is derived by the report
+  (monthly × 12); never store it.
+
+**Call 16, cost leakage.**
+- The tool description says `"drifted"`; it errors. `"modified"` works and is what the UI calls the state.
+- Each asset comes back as a full object (about 2 KB) even with `source`. Read results from the
+  saved file with a script; do not paste them inline. Results are under `responseObjects`, the
+  total is `totalObjects`. `size` can go up to 10000; page with `afterKey`, but stop when rows
+  collected equals `totalObjects`: the last page still returns an `afterKey`.
+- `leakage.assets` is the count of **all** modified assets. `leakage.costed_assets` is the count
+  with `costDelta > 0`. `leakage.monthly_usd` is the sum of the **positive** `costDelta` values,
+  **each rounded to 2 places before summing** (the UI rounds per row; summing first can be a cent
+  off). Treat a missing `costDelta` as 0. Negative values are excluded, not netted. Do not filter by policy through
+  this tool; it ignores that filter.
+- `leakage.assets` should equal `iacCoverage.drifted` from call 1. If they differ, say so in
+  `cloud_waste.note`.
+
+**Failures.** A failed call leaves its fields `null` with a note in `cloud_waste.note`. If call 15
+fails, `policies`, `monthly_usd` and `violating_assets` are all `null`. An empty policy list that
+came from a failed or empty response is a failure, not "no waste".
+
+**The key's reach.** A key that cannot see every project returns low waste and leakage numbers
+with no error. If either falls by more than half against last week, the validator warns. That
+may be a real cleanup or a key problem: check the key's project membership, and record `null`
+with a note if it is the key.
 
 ### Runner projects are a tree: do not query only the root
 
@@ -165,7 +207,7 @@ For a quick summary, cover these and stop:
 
 For a fuller report: a headline table of what moved or sits off target, then the metrics grouped
 by pillar (Inventory & Coverage, IaC Estate, Governance & Posture, Automation & Guardrails,
-Adoption), each with current, prior, change, target and status; then a watchlist ordered by
+Adoption, Cloud Waste), each with current, prior, change, target and status; then a watchlist ordered by
 severity; then the caveats.
 
 ### Interpretation
@@ -183,6 +225,8 @@ the snapshot's top-level `notes` so it travels with the report.
 
 - **Coverage is a floor.** Repo-scoped coverage can be misattributed (see `KPI-FRAMEWORK.md`),
   so do not quote repo-scoped numbers.
+- **Dollar figures are list price.** Say so every time you quote a Cloud Waste number.
+  A leakage dollar figure comes from the assets with a cost impact, not from all drifted assets.
 - **Workspace count is not workspace health.** Report the count with a pass figure beside it if
   you have one.
 - Carry forward active collection failures (timeouts, capped counts) named in

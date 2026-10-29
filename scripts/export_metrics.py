@@ -17,8 +17,9 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from build_report import (ROOT, catalog, comparison, derive,  # noqa: E402
-                          load_snapshots, standing_caveats, status)
+from build_report import (ROOT, catalog, cloud_waste_caveats, cloud_waste_visible,  # noqa: E402
+                          comparison, derive, load_snapshots, shows_as_zero,
+                          standing_caveats, status)
 
 OUT_CSV = ROOT / "reports" / "kpi-metrics.csv"
 OUT_JSON = ROOT / "reports" / "kpi-metrics.json"
@@ -37,6 +38,10 @@ def md_num(val, unit):
         return "no data"
     if unit == "percent":
         return f"{val:,.2f}%"
+    if unit == "usd":
+        return f"${val:,.0f}"
+    if unit == "usd2":
+        return f"${val:,.2f}"
     if unit == "score":
         return f"{val:g}"
     return f"{val:,.0f}"
@@ -47,10 +52,11 @@ def md_delta(row, unit):
     if d is None:
         return "—"
     vs = f" vs {row['delta_vs'].split('-')[-1]}" if row.get("delta_vs") and row["delta_gap"] > 1 else ""
-    if d == 0:
+    if shows_as_zero(d, unit):
         return "no change" + vs
     sign = "+" if d > 0 else "−"
-    mag = f"{abs(d):,.2f} pt" if unit == "percent" else f"{abs(d):,.0f}"
+    mag = {"percent": f"{abs(d):,.2f} pt", "usd": f"${abs(d):,.0f}",
+           "usd2": f"${abs(d):,.2f}"}.get(unit, f"{abs(d):,.0f}")
     pc = row["pct_change"]
     tail = f" ({sign}{abs(pc):.1f}%)" if pc not in (None, 0) and unit != "percent" else ""
     return f"{sign}{mag}{tail}{vs}"
@@ -156,6 +162,9 @@ def write_markdown(snaps, weeks, rows, pillars):
                  "matched assets: no subscribed policies, *not* a score of zero.")
     for n in cur.get("notable", []):
         L.append(f"- **this week** — {n}")
+    if cloud_waste_visible(pillars):
+        for c in cloud_waste_caveats(cur, snaps[:-1]):
+            L.append(f"- **cloud waste** — {c}")
     for c in standing_caveats():
         L.append(f"- **standing** — {c}")
     L.append("")
@@ -201,7 +210,7 @@ def main():
                 "pillar": pillar,
                 "metric": label,
                 "key": key,
-                "unit": {"n": "count", "%": "percent", "score": "score"}[unit],
+                "unit": {"n": "count", "%": "percent", "score": "score", "usd": "usd", "usd2": "usd2"}[unit],
                 "target": target,
                 "good_direction": direction,
                 **{w: v for w, v in zip(weeks, vals)},

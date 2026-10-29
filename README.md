@@ -1,12 +1,16 @@
 # Firefly weekly KPI scorecard
 
 Collects a weekly snapshot of one Firefly account's health and turns the history into a scorecard:
-IaC coverage, drift, ghost assets, posture scores, guardrails, workspaces and adoption, each with
-week-over-week change, a trend line and a status against your own targets.
+IaC coverage, drift, ghost assets, posture scores, guardrails, workspaces, adoption and cloud waste,
+each with week-over-week change, a trend line and a status against your own targets.
 
 ![Example scorecard](docs/scorecard-example.png)
 
-*The scorecard, built from the synthetic data in `examples/demo-home`. Each tile shows the value, change since the last week with data, a trend line and your target; the info icon on a tile explains the metric. The full page continues with a watchlist, who is using the platform, and measurement caveats.*
+*The scorecard, built from the synthetic data in `examples/demo-home`. Each tile shows the value, change since the last week with data, a trend line and your target; the info icon on a tile explains the metric. The full page continues with the Cloud Waste section (waste and drift cost, with a per-policy table), a watchlist, who is using the platform, and measurement caveats.*
+
+![Cloud Waste section of the example scorecard](docs/scorecard-cloud-waste.png)
+
+*The Cloud Waste section from the same synthetic data, in the second week with data. The tiles show waste and drift cost per year with their change; every dollar is list price. The table lists each policy with its violating assets and cost: "new" appeared this week, "no cost model" has a count but no dollars, and the muted row is a policy that is no longer reported, shown with its figures and the week they come from.*
 
 You get, after every run:
 
@@ -20,7 +24,7 @@ One checkout tracks **one Firefly account**. To track a second account, clone th
 
 ## How it works
 
-1. **Collect.** Claude Code runs the `/firefly-weekly-kpi` skill, which makes about 15 read-only
+1. **Collect.** Claude Code runs the `/firefly-weekly-kpi` skill, which makes about 16 read-only
    calls to the Firefly API (through the Firefly MCP server) and writes `data/snapshots/<ISO-week>.json`.
 2. **Validate.** `scripts/validate_snapshot.py` checks the snapshot (see Safeguards).
 3. **Build.** `scripts/build_report.py` and `scripts/export_metrics.py` read every snapshot and write
@@ -28,6 +32,22 @@ One checkout tracks **one Firefly account**. To track a second account, clone th
    JSON and Markdown cannot disagree.
 
 KPI definitions and data-source notes are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.md).
+
+### Cloud Waste
+
+The **Cloud Waste** section has two parts, each week over week and linked back to the Firefly UI:
+
+- **Waste.** The monthly cost of resources flagged by Cloud Waste policies that have a cost model, shown
+  per year, with the number of violating assets. A table lists every Cloud Waste policy with its asset type,
+  violating assets and cost, linking to the policy and to its assets. A policy with no cost model is listed
+  with its count and a "no cost model" label, never as $0.
+- **Cost leakage.** The positive cost change of drifted assets, shown per year, with how many drifted
+  assets carry a cost and how many drifted assets there are in all.
+
+**Every dollar figure is list price**: no discounts, commitments or credits are applied, and costs come from
+the Firefly API, never from rates in this repo. Read the table before reading a change as remediation: a
+total also moves when a policy appears or disappears. A key that cannot see every project returns low
+numbers with no error. Definitions and caveats are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.md) (Pillar 6).
 
 ## Requirements
 
@@ -43,7 +63,7 @@ KPI definitions and data-source notes are in [`KPI-FRAMEWORK.md`](KPI-FRAMEWORK.
 git clone https://github.com/Firefly-SE/firefly-kpi-scorecard.git ~/code/firefly-kpi-scorecard
 cd ~/code/firefly-kpi-scorecard
 
-# Optional: see what a report looks like first, using synthetic data
+# Optional: see what a report looks like first, using synthetic data (includes Cloud Waste)
 KPI_HOME=examples/demo-home python3 scripts/build_report.py
 # then open examples/demo-home/reports/firefly-kpi-scorecard.html
 
@@ -123,6 +143,11 @@ Everything per-account lives in `data/` (gitignored). Set `KPI_HOME=/some/dir` t
 A snapshot's top-level `notes` field is the place to explain an unexplained swing; it is rendered as a
 caveat on that week's report.
 
+In the `cloud_waste` block, only `caveats` (a list of sentences a reader needs) is printed. `collector_note`
+holds process detail and is never shown. To hide the Cloud Waste tiles for an account with no cost models,
+add the keys `waste_yearly`, `waste_monthly`, `waste_assets`, `leakage_yearly`, `leakage_costed` and
+`leakage_assets` to `hidden_metrics` in `config.json`.
+
 ## Safeguards
 
 These exist because a wrong number on a scorecard does more harm than a missing one.
@@ -132,8 +157,9 @@ These exist because a wrong number on a scorecard does more harm than a missing 
 - **One account per install.** Builders refuse to run if a snapshot's `account_id` differs from
   `config.json` (or, with no ID configured, if snapshots disagree with each other), so deltas can't mix accounts.
 - **Validation.** `scripts/validate_snapshot.py` rejects missing fields and wrong account IDs, and warns
-  on a suspicious zero or on workspace counts that fall by more than half week-over-week. A big drop
-  more often means the API key can only see part of the project tree than that workspaces vanished.
+  on a suspicious zero, on workspace counts that fall by more than half week-over-week, and on Cloud Waste
+  totals that disagree with their policy rows or fall by more than half. A big drop may be a real cleanup
+  or an API key that can only see part of the project tree; check the key before believing it.
 - **Targets are yours.** Status colours are computed against `data/targets.json` only.
 
 ## Troubleshooting
@@ -142,6 +168,8 @@ These exist because a wrong number on a scorecard does more harm than a missing 
 |---|---|
 | Claude says no Firefly tools are available | The project MCP server isn't approved. Run `claude` interactively in this folder once and approve it; check `.mcp.json` exists |
 | Setup says the keys were rejected | Wrong key pair, or keys without access. Create a new pair in Firefly and re-run setup |
+| Cloud Waste tiles read "no data" | The policy or inventory call failed that week (the report says so under its caveats), or the snapshot predates the section. A tile with no earlier week to compare against reads "baseline" |
+| Waste or leakage fell by more than half | May be a real cleanup, or a key that cannot see every project. Check the key's project membership before believing it |
 | Runner or CI workspaces read far lower than expected | The collecting key isn't a member of the projects holding them. Use a key with access to the whole tree |
 | A provider reads "no data" | Its integrations call failed (timeouts happen). It is recorded as null on purpose; see the snapshot's `integrations.notes` |
 | Scheduled run never produces a snapshot | Repo is inside Google Drive/Documents/Desktop (macOS blocks launchd), or `claude` isn't on launchd's PATH. See `data/logs/launchd.err.log` and the week's log |
@@ -157,6 +185,21 @@ Logs: `data/logs/<ISO-week>.log` for each run.
   It is gitignored. If you remove that ignore to keep snapshot history in git, use a private repo.
 - Collection is **read-only**: the skill only calls list/search/get endpoints.
 
+## Example data
+
+`examples/demo-home` holds five synthetic weeks (2025-W50 to 2026-W02) for a fictional "Example Corp". Every
+number is invented. Cloud Waste data starts in 2026-W01, so the demo shows both behaviours of the section:
+
+- **2026-W01** is the first week with Cloud Waste data, so its tiles read "baseline" and the report says
+  there is no week-over-week change yet.
+- **2026-W02** compares against W01 and shows each state a policy row can be in: improved (green), unchanged,
+  new, no longer reported (muted, with last week's figures), and a policy with no cost model.
+
+```bash
+KPI_HOME=examples/demo-home python3 scripts/build_report.py
+# open examples/demo-home/reports/firefly-kpi-scorecard.html  (generated, gitignored)
+```
+
 ## Layout
 
 ```
@@ -169,7 +212,7 @@ scripts/validate_snapshot.py   snapshot sanity checks
 scripts/weekly-run.sh          unattended runner
 scripts/copy-scorecard.sh      optional copy to a shared folder
 templates/snapshot.template.json
-examples/demo-home/            synthetic data to preview a report
+examples/demo-home/            synthetic data to preview a report, Cloud Waste included
 tests/                         python3 -m unittest discover tests
 data/                          your account's config, snapshots, reports, logs (gitignored)
 ```
@@ -180,7 +223,8 @@ data/                          your account's config, snapshots, reports, logs (
 python3 -m unittest discover tests
 ```
 
-Covers the report build, target and hidden-metric handling, the cross-account guard, the validator,
+Covers the report build, the Cloud Waste section (links, list-price labels, baseline and failed-fetch
+weeks, gaps in the trend line), target and hidden-metric handling, the cross-account guard, the validator,
 setup's unattended mode, and a check that no account-specific strings have crept into the code.
 
 ## License

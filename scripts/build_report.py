@@ -18,11 +18,26 @@ import os
 import pathlib
 import sys
 from html import escape as _esc
+from urllib.parse import quote
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 ROOT = pathlib.Path(os.environ.get("KPI_HOME") or REPO / "data").expanduser().resolve()
 SNAP_DIR = ROOT / "snapshots"
 OUT = ROOT / "reports" / "firefly-kpi-scorecard.html"
+
+APP_URL = "https://app.firefly.ai"
+CLOUD_WASTE = "Cloud Waste"
+URL_GOVERNANCE = f"{APP_URL}/governance"
+URL_LEAKAGE = f"{APP_URL}/inventory?defaultView=false&state=modified"
+
+
+def url_policy(pid):
+    return f"{APP_URL}/governance?id={quote(str(pid), safe='')}"
+
+
+def url_policy_assets(pid):
+    return f"{APP_URL}/inventory?defaultView=false&classifications={quote(str(pid), safe='')}"
+
 
 # Suggested targets, applied by setup.py when the user accepts the defaults. Scale-dependent
 # counts (unmanaged, drifted, workspaces) are deliberately absent: a target that is right
@@ -138,6 +153,9 @@ def derive(snap):
     users = g(snap, "adoption", "users") or []
     top_user = max((u.get("count", 0) for u in users), default=None)
 
+    waste_monthly = g(snap, "cloud_waste", "monthly_usd")
+    leak_monthly = g(snap, "cloud_waste", "leakage", "monthly_usd")
+
     return {
         "total_assets": total,
         "coverage_pct": pct(managed, in_cloud),
@@ -169,11 +187,18 @@ def derive(snap):
         "top_user_share": pct(top_user, acts),
         "click_ops": g(snap, "events", "click_ops"),
         "denied": g(snap, "events", "denied"),
+        "waste_yearly": None if waste_monthly is None else round(waste_monthly * 12, 2),
+        "waste_monthly": waste_monthly,
+        "waste_assets": g(snap, "cloud_waste", "violating_assets"),
+        "leakage_yearly": None if leak_monthly is None else round(leak_monthly * 12, 2),
+        "leakage_costed": g(snap, "cloud_waste", "leakage", "costed_assets"),
+        "leakage_assets": g(snap, "cloud_waste", "leakage", "assets"),
     }
 
 
 # --------------------------------------------------------------- KPI catalog
 # (key, label, unit, direction, target, note)
+#   unit: "n" count, "%" percent, "score", "usd" whole dollars, "usd2" dollars and cents
 #   direction: "up" good rising, "down" good falling, "flat" informational
 #   target: always None here. Real targets come from <home>/targets.json via catalog().
 _CATALOG = [
@@ -216,6 +241,14 @@ _CATALOG = [
         ("click_ops",        "ClickOps events",     "n", "down", None, "console changes bypassing IaC"),
         ("denied",           "Denied events",       "n", "down", None, "blocked API calls"),
     ]),
+    (CLOUD_WASTE, "Spend Firefly policies flag as waste, and cost that has crept in through drift. Every dollar is list price.", [
+        ("waste_yearly",    "Cloud waste / year",   "usd",  "down", None, "list price, monthly × 12"),
+        ("waste_monthly",   "Cloud waste / month",  "usd2", "down", None, "list price, costed policies only"),
+        ("waste_assets",    "Violating assets",     "n",    "down", None, "costed policies only"),
+        ("leakage_yearly",  "Cost leakage / year",  "usd",  "down", None, "list price, positive drift deltas × 12"),
+        ("leakage_costed",  "Drifted, with cost",   "n",    "down", None, "the assets behind the dollars above"),
+        ("leakage_assets",  "Drifted, all",         "n",    "down", None, "most carry no cost impact"),
+    ]),
 ]
 
 KPI_KEYS = [m[0] for _, _, ms in _CATALOG for m in ms]
@@ -252,7 +285,72 @@ METRIC_HELP = {
     "top_user_share": "The largest single user's share of all activity. High means key-person risk.",
     "click_ops": "Events where infrastructure was changed from the cloud console, bypassing IaC. Track the absolute count, not a share of total events.",
     "denied": "Events that were blocked.",
+    "waste_yearly": "The dashboard's Cloud Waste (Projected Savings) figure: monthly Cloud Waste cost × 12. List price, before any discount, commitment or credit. A key that cannot see every project reads low with no error.",
+    "waste_monthly": "Sum of monthly cost across Cloud Waste policies that have a cost model. List price. Policies without a cost model add nothing here and are listed separately.",
+    "waste_assets": "Sum of total_assets across the Cloud Waste policies that have a cost model, so the count matches the dollars beside it. An asset that violates two policies is counted twice. Policies with no cost model are listed in the table below and not counted here.",
+    "leakage_yearly": "The dashboard's Cost Leakage (Drift Impact) figure: sum of the positive costDelta of drifted assets (state modified), × 12. List price. Negative deltas (savings) are excluded rather than netted off; this is not confirmed against a tenant that has any.",
+    "leakage_costed": "Drifted assets with a positive costDelta: the assets that produce the leakage dollars. Read this count, not the all-drifted count, next to the dollar figure.",
+    "leakage_assets": "Every asset in the modified (drifted) state. Ghost assets are counted separately and are not included, so this is smaller than a list that shows drifted and ghost assets together. Most usually carry no cost impact, so do not read this as the number of assets behind the leakage dollars.",
 }
+
+# key: (url, link text, hint). The Cloud Waste filter cannot be set from a URL, and state=modified
+# opens drifted AND ghost assets, so each link says what it really opens. "Drifted, all" has no
+# link on purpose: a link from its count (90) to a page of thousands of rows reads as a bug.
+_OPEN_GOV = (URL_GOVERNANCE, "Open Governance, then pick Cloud Waste", None)
+_OPEN_DRIFT = (URL_LEAKAGE, "Opens drifted and ghost assets",
+               "Sort by Drift Cost Impact to see the ones behind the dollars.")
+METRIC_LINKS = {
+    "waste_yearly": _OPEN_GOV, "waste_monthly": _OPEN_GOV, "waste_assets": _OPEN_GOV,
+    "leakage_yearly": _OPEN_DRIFT, "leakage_costed": _OPEN_DRIFT,
+}
+
+CLOUD_WASTE_CAVEATS = [
+    "Every dollar figure is list price, before discounts, commitments and credits.",
+    "A key that cannot see all projects returns low numbers with no error. If waste or leakage "
+    "drops sharply, check the collecting key's project membership before believing it.",
+    "Violating-asset counts are as Firefly's policy API reports them. It also reports an excluded "
+    "count per policy, and how Firefly's own views treat those assets is not established, so a "
+    "view in Firefly that applies exclusions may show fewer assets than the table does. "
+    "A policy with no cost model has no cost field, so it adds nothing to the dollar totals. "
+    "It is listed with its asset count and labelled \"no cost model\".",
+    "Cost leakage counts two things: all drifted assets, and the subset with a positive cost "
+    "impact. Only the second produces the dollars. The link opens drifted and ghost assets, unsorted.",
+    "A change in a total can come from a policy appearing or disappearing, not only from waste "
+    "rising or falling. Check the policy table before reading a tile's change as remediation.",
+]
+
+FIRST_WASTE_WEEK_CAVEAT = ("This is the first week with Cloud Waste data, so it has no "
+                           "week-over-week change yet.")
+
+
+def cloud_waste_visible(pillars):
+    """False when hidden_metrics removed every Cloud Waste tile: then its caveats must go too."""
+    return any(name == CLOUD_WASTE for name, _, _ in pillars)
+
+
+def cloud_waste_caveats(snap, earlier=()):
+    """Plain-text caveats for a snapshot that carries a cloud_waste section; empty otherwise.
+
+    `earlier` is the snapshots before this one. The first-week line shows only when none of
+    them has a cloud_waste block, so it cannot go stale on the third week.
+    """
+    cw = g(snap, "cloud_waste")
+    if not isinstance(cw, dict):
+        return []
+    out = list(CLOUD_WASTE_CAVEATS)
+    if not any(isinstance(g(s, "cloud_waste"), dict) for s in earlier):
+        out.append(FIRST_WASTE_WEEK_CAVEAT)
+    # Only these reach the reader. "Not collected" is generated here, not typed by the collector,
+    # and `caveats` is an explicit reader-facing list. `collector_note` (process detail) and the
+    # deprecated free-text `note` are never rendered.
+    lead = []
+    leak = cw.get("leakage") if isinstance(cw.get("leakage"), dict) else {}
+    if cw.get("policies") is None or cw.get("monthly_usd") is None:
+        lead.append("Cloud Waste policies were not collected this week, so the waste figures read “no data”.")
+    if any(leak.get(k) is None for k in ("assets", "costed_assets", "monthly_usd")):
+        lead.append("Cost leakage was not collected this week, so the leakage figures read “no data”.")
+    lead += [str(c).strip() for c in (cw.get("caveats") or []) if str(c).strip()]
+    return lead + out
 
 
 def catalog():
@@ -277,11 +375,56 @@ def catalog():
 def fmt(val, unit):
     if val is None:
         return "no data"
+    if unit == "usd":
+        return f"${val:,.0f}"
+    if unit == "usd2":
+        return f"${val:,.2f}"
     if unit == "%":
         return f"{val:,.2f}%".replace(".00%", "%")
     if unit == "score":
         return f"{val:g}"
     return f"{val:,.0f}"
+
+
+# Decimals each unit is displayed with. A change that rounds to zero at that precision is "no
+# change": printing it gives "−0.00 pt" or "+0%". Units with no entry compare at 1e-9.
+DECIMALS = {"%": 2, "percent": 2, "usd2": 2, "usd": 0, "n": 0, "count": 0}
+
+
+def shows_as_zero(diff, unit):
+    return float(f"{abs(diff):.{DECIMALS.get(unit, 9)}f}") == 0
+
+
+def baseline_pillars(pillars, derived, weeks):
+    """Pillars where no metric has an earlier real value to compare against."""
+    out = []
+    for pillar, _, metrics in pillars:
+        keys = [m[0] for m in metrics if derived[-1].get(m[0]) is not None]
+        if keys and all(comparison(k, derived, weeks)["state"] != "ok" for k in keys):
+            out.append(pillar)
+    return out
+
+
+def offweek_notes(pillars, derived, weeks, prev_week):
+    """Per section, the comparison week when it is not the previous snapshot's week.
+
+    "Cloud Waste against 2026-W43 (W44 not collected)", or "3 of 6 figures" when only some of
+    the section's figures had to fall back. The chips already say "vs W43"; this makes the
+    subtitle agree with them.
+    """
+    short = prev_week.split("-")[-1]
+    notes = []
+    for pillar, _, metrics in pillars:
+        have = [m[0] for m in metrics if derived[-1].get(m[0]) is not None]
+        by_week = {}
+        for k in have:
+            c = comparison(k, derived, weeks)
+            if c["state"] == "ok" and c["week"] != prev_week:
+                by_week[c["week"]] = by_week.get(c["week"], 0) + 1
+        for wk, n in sorted(by_week.items(), reverse=True):
+            who = pillar if n == len(have) else f"{pillar}: {n} of {len(have)} figures"
+            notes.append(f"{who} against {wk} ({short} not collected)")
+    return notes
 
 
 def status(val, direction, target):
@@ -334,7 +477,7 @@ def delta_chip(cur, comp, unit, direction):
                 f'more than {MAX_LOOKBACK_WEEKS} weeks ago">no recent data</span>')
     vs = f" vs {comp['week'].split('-')[-1]}" if comp["gap"] > 1 else ""
     diff = cur - comp["value"]
-    if abs(diff) < 1e-9:
+    if shows_as_zero(diff, unit):
         return f'<span class="chip chip-flat">no change{vs}</span>'
     sign = "+" if diff > 0 else "−"
     mag = fmt(abs(diff), unit).replace("no data", "")
@@ -346,34 +489,64 @@ def delta_chip(cur, comp, unit, direction):
     return f'<span class="chip chip-{tone}">{sign}{mag}{vs}</span>'
 
 
-def sparkline(series, direction):
-    pts = [v for v in series if v is not None]
-    if len(pts) < 2:
+def sparkline(series, direction, weeks=None):
+    """Trend line positioned by ISO week date, one step per calendar week.
+
+    A week with no reading, whether a null or no snapshot at all, leaves a visible gap: the
+    segment across it is dashed and nothing is interpolated. Using the ISO Monday (not the week
+    number) keeps W52 to W01 one step apart. Without `weeks` it falls back to list position.
+    No current reading: draw nothing, or the line would end on last week's value next to a tile
+    that says "no data".
+    """
+    if not series or series[-1] is None:
         return ""
+    real = [i for i, v in enumerate(series) if v is not None]
+    if len(real) < 2:
+        return ""
+    if weeks:
+        base = _iso_monday(weeks[real[0]])
+        pos = lambda i: (_iso_monday(weeks[i]) - base).days // 7
+    else:
+        pos = lambda i: i - real[0]
+    total = pos(len(series) - 1)
+    if total <= 0:
+        return ""
+    pts = [series[i] for i in real]
     lo, hi = min(pts), max(pts)
     span = (hi - lo) or 1
     w, h = 76, 22
-    step = w / (len(pts) - 1)
-    coords = [(i * step, h - 2 - (v - lo) / span * (h - 5)) for i, v in enumerate(pts)]
-    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    area = f"0,{h} {line} {w},{h}"
-    lx, ly = coords[-1]
+    step = w / total
+    xy = [(pos(i) * step, h - 2 - (series[i] - lo) / span * (h - 5), pos(i)) for i in real]
+    runs, gaps = [[xy[0]]], []
+    for a_, b_ in zip(xy, xy[1:]):
+        if b_[2] - a_[2] == 1:
+            runs[-1].append(b_)
+        else:
+            gaps.append((a_, b_))
+            runs.append([b_])
+    parts = []
+    for r in runs:
+        if len(r) >= 2:
+            line = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in r)
+            parts.append(f'<polygon points="{r[0][0]:.1f},{h} {line} {r[-1][0]:.1f},{h}" class="spark-fill"/>')
+            parts.append(f'<polyline points="{line}" class="spark-line"/>')
+        elif r is not runs[-1]:
+            parts.append(f'<circle cx="{r[0][0]:.1f}" cy="{r[0][1]:.1f}" r="1.6" class="spark-pt"/>')
+    for a_, b_ in gaps:
+        parts.append(f'<polyline points="{a_[0]:.1f},{a_[1]:.1f} {b_[0]:.1f},{b_[1]:.1f}" class="spark-gap"/>')
+    lx, ly, _ = xy[-1]
+    parts.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.2" class="spark-dot"/>')
     trend = pts[-1] - pts[-2]
     if direction == "flat" or trend == 0:
         cls = "spark-flat"
     else:
         good = trend > 0 if direction == "up" else trend < 0
         cls = "spark-good" if good else "spark-bad"
-    return (
-        f'<svg class="spark {cls}" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
-        f'aria-hidden="true" focusable="false">'
-        f'<polygon points="{area}" class="spark-fill"/>'
-        f'<polyline points="{line}" class="spark-line"/>'
-        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.2" class="spark-dot"/></svg>'
-    )
+    return (f'<svg class="spark {cls}" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
+            f'aria-hidden="true" focusable="false">{"".join(parts)}</svg>')
 
 
-def tile(key, label, unit, direction, target, note, cur, comp, history):
+def tile(key, label, unit, direction, target, note, cur, comp, history, weeks=None):
     val = cur.get(key)
     st = status(val, direction, target)
     tgt = f'<span class="tile-target">target {fmt(target, unit)}</span>' if target is not None else ""
@@ -383,11 +556,15 @@ def tile(key, label, unit, direction, target, note, cur, comp, history):
         f'aria-describedby="tip-{key}">i</button>'
         f'<span class="tile-tip" role="tooltip" id="tip-{key}">{_esc(help_text)}</span>'
     ) if help_text else ""
+    href, text, hint = METRIC_LINKS.get(key, (None, None, None))
+    link = (f'\n        <a class="tile-link" href="{_esc(href)}" target="_blank" rel="noopener">'
+            f'{_esc(text)} ↗</a>' + (f'<span class="tile-hint">{_esc(hint)}</span>' if hint else "")
+            ) if href else ""
     return f"""      <div class="tile tile-{st}">
-        <div class="tile-head"><span class="tile-label">{label}{info}</span>{sparkline(history, direction)}</div>
+        <div class="tile-head"><span class="tile-label">{label}{info}</span>{sparkline(history, direction, weeks)}</div>
         <div class="tile-value{' tile-value-empty' if val is None else ''}">{fmt(val, unit)}</div>
         <div class="tile-foot">{delta_chip(val, comp, unit, direction)}{tgt}</div>
-        <p class="tile-note">{note}</p>
+        <p class="tile-note">{note}</p>{link}
       </div>"""
 
 
@@ -417,6 +594,96 @@ def composition_bar(cur):
     return f"""    <div class="composition">
       <div class="comp-bar">{''.join(segs)}</div>
       <ul class="comp-legend">{''.join(legend)}</ul>
+    </div>"""
+
+
+def prior_policies(loaded):
+    """(week, {policy id: policy}) from the latest earlier snapshot with a policy list.
+
+    Same rule as comparison(): a real earlier measurement, at most MAX_LOOKBACK_WEEKS back.
+    None when there is nothing to compare against.
+    """
+    for s in reversed(loaded[:-1]):
+        pols = g(s, "cloud_waste", "policies")
+        if isinstance(pols, list):
+            gap = max(1, (_iso_monday(loaded[-1]["week"]) - _iso_monday(s["week"])).days // 7)
+            if gap > MAX_LOOKBACK_WEEKS:
+                return None
+            return s["week"], gap, {p.get("id"): p for p in pols if isinstance(p, dict)}
+    return None
+
+
+def policy_table(loaded):
+    """Per-policy Cloud Waste rows: name, asset type, violating assets, list-price cost."""
+    pols = g(loaded[-1], "cloud_waste", "policies")
+    if pols is None:
+        return '<p class="empty">no data: the Cloud Waste policies were not collected this week.</p>'
+    pols = [p for p in pols if isinstance(p, dict)]
+    if not pols:
+        return '<p class="empty">No Cloud Waste policy has matching assets.</p>'
+    prior = prior_policies(loaded)
+
+    def chip(cur, old, week, gap, unit):
+        if cur is None or old is None:
+            return ""
+        comp = {"state": "ok", "value": old, "week": week, "gap": gap}
+        return delta_chip(cur, comp, unit, "down")
+
+    # Costed policies first, biggest spend first; then the ones with no cost model.
+    pols.sort(key=lambda p: (p.get("monthly_usd") is None,
+                             -(p.get("monthly_usd") or 0), -(p.get("total_assets") or 0)))
+    rows = []
+    for p in pols:
+        pid = p.get("id")
+        name = _esc(str(p.get("name") or pid or "unnamed policy"))
+        name_cell = f'<a href="{_esc(url_policy(pid))}" target="_blank" rel="noopener">{name}</a>' if pid else name
+        n_assets = p.get("total_assets")
+        assets_txt = fmt(n_assets, "n")
+        assets_cell = (f'<a href="{_esc(url_policy_assets(pid))}" target="_blank" rel="noopener">{assets_txt}</a>'
+                       if pid and n_assets is not None else assets_txt)
+        cost = p.get("monthly_usd")
+        old = prior[2].get(pid) if prior and pid else None
+        if prior and pid and old is None:
+            a_chip = c_chip = '<span class="chip chip-flat">new</span>'
+        elif old is not None:
+            a_chip = chip(n_assets, old.get("total_assets"), prior[0], prior[1], "n")
+            c_chip = chip(cost, old.get("monthly_usd"), prior[0], prior[1], "usd2")
+        else:
+            a_chip = c_chip = ""
+        if cost is None:
+            cost_cell, year_cell = '<span class="nocost">no cost model</span>', '<span class="nocost">—</span>'
+            c_chip = ""
+        else:
+            cost_cell, year_cell = f"{fmt(cost, 'usd2')} {c_chip}", fmt(cost * 12, "usd")
+        rows.append(
+            f'<tr><td class="strong">{name_cell}</td><td>{_esc(str(p.get("asset_type") or "—"))}</td>'
+            f'<td class="num">{assets_cell} {a_chip}</td><td class="num">{cost_cell}</td>'
+            f'<td class="num">{year_cell}</td></tr>')
+    # Policies reported last time and not now. Shown muted with last week's figures. Not called
+    # "resolved": the policy may be fixed, disabled, or out of the collecting key's view.
+    if prior:
+        now_ids = {p.get("id") for p in pols}
+        gone = sorted((p for pid, p in prior[2].items() if pid and pid not in now_ids),
+                      key=lambda p: -(p.get("monthly_usd") or 0))
+        wk = prior[0].split("-")[-1]
+        for p in gone:
+            pid = p["id"]
+            name = _esc(str(p.get("name") or pid))
+            was_cost = p.get("monthly_usd")
+            was_cost_txt = (f'<span class="chip chip-flat">was {fmt(was_cost, "usd2")} ({wk})</span>'
+                            if was_cost is not None else '<span class="nocost">no cost model</span>')
+            rows.append(
+                f'<tr class="row-gone"><td class="strong"><a href="{_esc(url_policy(pid))}" target="_blank" '
+                f'rel="noopener">{name}</a> <span class="nocost">no longer reported</span></td>'
+                f'<td>{_esc(str(p.get("asset_type") or "—"))}</td>'
+                f'<td class="num"><span class="chip chip-flat">was {fmt(p.get("total_assets"), "n")} ({wk})</span></td>'
+                f'<td class="num">{was_cost_txt}</td><td class="num"><span class="nocost">—</span></td></tr>')
+    return f"""    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Policy</th><th>Asset type</th><th class="num">Violating assets</th>
+        <th class="num">Monthly (list price)</th><th class="num">Yearly (list price)</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
     </div>"""
 
 
@@ -478,7 +745,7 @@ def main():
     bands = []
     for pillar, blurb, metrics in pillars:
         tiles = "\n".join(
-            tile(k, lbl, u, d, t, n, cur, comparison(k, derived, weeks), hist(k))
+            tile(k, lbl, u, d, t, n, cur, comparison(k, derived, weeks), hist(k), weeks)
             for k, lbl, u, d, t, n in metrics
         )
         bands.append(f"""  <section class="band">
@@ -486,6 +753,20 @@ def main():
     <div class="grid">
 {tiles}
     </div>
+  </section>""")
+        if pillar == CLOUD_WASTE:
+            prior = prior_policies(loaded)
+            gone_note = (f" A policy missing from this week's list is shown muted with its figures from "
+                         f"{_esc(prior[0])}; it may be fixed, disabled, or out of the collecting key's view."
+                         if prior and g(latest, "cloud_waste", "policies") is not None else "")
+            vs = ("" if g(latest, "cloud_waste", "policies") is None
+                  else f"Changes are against {_esc(prior[0])}." if prior
+                  else "No earlier week has Cloud Waste data, so there is nothing to compare against yet.")
+            bands.append(f"""  <section class="section">
+    <h2>Cloud waste by policy</h2>
+    <p class="lede">Each Cloud Waste policy with matching assets. Dollar figures are list price. A policy
+    without a cost model has no cost, only a count.{gone_note} {vs}</p>
+{policy_table(loaded)}
   </section>""")
 
     users = g(latest, "adoption", "users") or []
@@ -521,6 +802,8 @@ def main():
             " return a null score with zero matched assets: no subscribed policies, "
             "not a score of zero. Rendered as “not scored”."
         )
+    if cloud_waste_visible(pillars):
+        caveats += [f"<strong>cloud waste</strong> — {_esc(c)}" for c in cloud_waste_caveats(latest, loaded[:-1])]
     caveats += [f"<strong>standing</strong> — {_esc(c)}" for c in standing_caveats()]
     caveat_html = "".join(f"<li>{c}</li>" for c in caveats)
 
@@ -528,9 +811,12 @@ def main():
     cov_cmp = comparison("coverage_pct", derived, weeks)
     if cov is not None and cov_cmp["state"] == "ok":
         d = cov - cov_cmp["value"]
-        tone = "good" if d > 0 else ("bad" if d < 0 else "flat")
-        cov_move = (f'<span class="chip chip-{tone}">'
-                    f'{"+" if d > 0 else "−"}{abs(d):.2f} pt vs {cov_cmp["week"]}</span>')
+        if shows_as_zero(d, "%"):
+            cov_move = f'<span class="chip chip-flat">no change vs {cov_cmp["week"]}</span>'
+        else:
+            tone = "good" if d > 0 else "bad"
+            cov_move = (f'<span class="chip chip-{tone}">'
+                        f'{"+" if d > 0 else "−"}{abs(d):.2f} pt vs {cov_cmp["week"]}</span>')
     elif cov is not None and cov_cmp["state"] == "stale":
         cov_move = '<span class="chip chip-flat">no recent data</span>'
     else:
@@ -538,6 +824,12 @@ def main():
 
     subtitle = (f"Week over week against {prev_week}" if prev_week
                 else "Baseline week — deltas begin next collection")
+    new_pillars = baseline_pillars(pillars, derived, weeks) if prev_week else []
+    if new_pillars:
+        subtitle += f" · no comparison yet for {', '.join(new_pillars)}"
+    off = offweek_notes(pillars, derived, weeks, prev_week) if prev_week else []
+    if off:
+        subtitle += " · " + "; ".join(off)
 
     name = _esc(str(latest.get("account_name") or "Account"))
     aid = latest.get("account_id")
@@ -654,6 +946,11 @@ h1,h2,h3 {{ font-family:Chivo,"IBM Plex Sans",sans-serif; text-wrap:balance; mar
   padding:9px 11px; background:var(--panel); color:var(--ink); border:1px solid var(--muted);
   border-radius:3px; box-shadow:0 4px 14px rgba(0,0,0,.18); font-family:Chivo,sans-serif;
   font-size:12px; font-weight:400; letter-spacing:0; text-transform:none; line-height:1.45; }}
+.tile-hint {{ display:block; margin-top:3px; font-size:11px; color:var(--muted); line-height:1.4; }}
+.tile-link {{ font-family:"IBM Plex Mono",monospace; font-size:10.5px; }}
+.row-gone td {{ color:var(--muted); background:color-mix(in srgb, var(--muted) 6%, transparent); }}
+.nocost {{ color:var(--muted); font-style:italic; font-family:"IBM Plex Sans",sans-serif; }}
+td a {{ text-decoration-thickness:1px; text-underline-offset:2px; }}
 .tile-info:hover + .tile-tip, .tile-info:focus + .tile-tip {{ display:block; }}
 
 .chip {{ font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
@@ -671,7 +968,11 @@ h1,h2,h3 {{ font-family:Chivo,"IBM Plex Sans",sans-serif; text-wrap:balance; mar
 .spark-bad .spark-fill {{ fill:var(--bad); }}
 .spark-flat .spark-line,.spark-flat .spark-dot {{ stroke:var(--muted); fill:var(--muted); }}
 .spark-flat .spark-fill {{ fill:var(--muted); }}
-.spark-dot {{ stroke:none; }}
+.spark-dot, .spark-pt {{ stroke:none; }}
+.spark-gap {{ fill:none; stroke-width:1.2; stroke-dasharray:2 2; stroke-linecap:round; }}
+.spark-good .spark-gap {{ stroke:var(--good); }} .spark-good .spark-pt {{ fill:var(--good); }}
+.spark-bad .spark-gap {{ stroke:var(--bad); }} .spark-bad .spark-pt {{ fill:var(--bad); }}
+.spark-flat .spark-gap {{ stroke:var(--muted); }} .spark-flat .spark-pt {{ fill:var(--muted); }}
 
 /* ---- watchlist ---- */
 .section {{ padding:32px 0; border-top:1px solid var(--rule); }}

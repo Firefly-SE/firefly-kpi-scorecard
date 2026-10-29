@@ -33,6 +33,46 @@ RARELY_ZERO = [("inventory", "codified"), ("inventory", "unmanaged"),
 SCOPE_SENSITIVE = [("automation", "runner_workspaces"), ("automation", "ci_workspaces")]
 
 
+def cloud_waste_checks(snap, prev):
+    """Cloud Waste consistency: totals against rows, suspicious zero, big drops."""
+    cw = snap.get("cloud_waste")
+    if not isinstance(cw, dict):
+        return []
+    out = []
+    if cw.get("note"):
+        out.append("cloud_waste.note is no longer shown in reports. Put process detail in "
+                   "cloud_waste.collector_note (never shown), or a sentence a reader needs in "
+                   "cloud_waste.caveats.")
+    pols = cw.get("policies")
+    if isinstance(pols, list):
+        costed = [p for p in pols if isinstance(p, dict) and isinstance(p.get("monthly_usd"), (int, float))]
+        cost = round(sum(p["monthly_usd"] for p in costed), 2)
+        assets = sum(p.get("total_assets") or 0 for p in costed)
+        if cw.get("monthly_usd") is not None and abs(cw["monthly_usd"] - cost) > 0.01:
+            out.append(f"cloud_waste.monthly_usd {cw['monthly_usd']} != sum of costed policies {cost}")
+        if cw.get("violating_assets") is not None and cw["violating_assets"] != assets:
+            out.append(f"cloud_waste.violating_assets {cw['violating_assets']} != "
+                       f"sum over costed policies {assets} (policies with no cost model are not counted)")
+    leak = cw.get("leakage") or {}
+    if isinstance(leak.get("assets"), int) and isinstance(leak.get("costed_assets"), int) \
+            and leak["costed_assets"] > leak["assets"]:
+        out.append("cloud_waste.leakage.costed_assets is larger than leakage.assets")
+    if cw.get("monthly_usd") == 0 and (cw.get("violating_assets") or 0) == 0 and pols:
+        out.append("cloud_waste.monthly_usd is 0 with policies listed: no cost model, or a failed "
+                   "collection written as 0? Use null for the second.")
+    pcw = (prev or {}).get("cloud_waste")
+    if isinstance(pcw, dict):
+        for label, now, before in (
+                ("cloud_waste.monthly_usd", cw.get("monthly_usd"), pcw.get("monthly_usd")),
+                ("cloud_waste.leakage.monthly_usd", leak.get("monthly_usd"), (pcw.get("leakage") or {}).get("monthly_usd"))):
+            if isinstance(now, (int, float)) and isinstance(before, (int, float)) \
+                    and before > 0 and now < before / 2:
+                out.append(f"{label} fell {before:,.2f} -> {now:,.2f} (more than half). This may be a "
+                           "real cleanup, or a key that cannot see every project. Check the key's "
+                           "project membership; if it is the key, record null with a note.")
+    return out
+
+
 def main():
     cfg = load_config()
     files = sorted(SNAP_DIR.glob("*.json"))
@@ -77,6 +117,8 @@ def main():
                     f"{'.'.join(key)} fell {before} -> {now} (more than half). Check that the "
                     "API key sees the whole project tree before believing this; if it does not, "
                     "record null with a note instead of the low number.")
+
+    warnings += cloud_waste_checks(snap, prev)
 
     d = derive(snap)
     print(f"{path.name}: coverage {d['coverage_pct']}%  total assets {d['total_assets']}")

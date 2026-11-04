@@ -1014,14 +1014,56 @@ footer {{ margin-top:40px; padding-top:20px; border-top:1px solid var(--rule);
   color:var(--muted); font-size:11.5px; font-family:"IBM Plex Mono",monospace; line-height:1.8; }}
 a {{ color:var(--accent); }}
 :focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
-@media (max-width:760px) {{
+@media screen and (max-width:760px) {{
   .headline, .band {{ grid-template-columns:1fr; }}
   .band-rail {{ position:static; }}
 }}
 @media (prefers-reduced-motion:reduce) {{ * {{ animation:none !important; transition:none !important; }} }}
+
+/* ---- save as PDF button (screen only) ---- */
+.print-bar {{ display:flex; justify-content:flex-end; margin:0 0 14px; }}
+.print-btn {{ font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.06em;
+  color:var(--accent); background:var(--panel); border:1px solid var(--accent);
+  border-radius:3px; padding:7px 14px; cursor:pointer; }}
+.print-btn:hover {{ background:var(--accent-soft); }}
+
+/* ---- print / save as PDF: same layout as the screen, on one tall page ----
+   The page is 1280px wide so no responsive rule changes, and the height is set
+   from the real content height just before printing (see script below). The
+   fixed height here is only a fallback if scripting is off. */
+@page {{ size:1280px 3600px; margin:0; }}
+@media print {{
+  :root, :root:not([data-theme="light"]), :root[data-theme="dark"] {{
+    --ground:#eef2f2; --panel:#ffffff; --panel-2:#f7fafa;
+    --ink:#0c1417; --ink-2:#33474d; --muted:#63797f; --rule:#d3dedf;
+    --accent:#0b7a6e; --accent-soft:#d6ebe8;
+    --good:#25714a; --bad:#a83a26; --warn:#8f6412;
+    --cod:#0b7a6e; --dri:#8f6412; --unm:#a83a26; --gho:#7c6f9a;
+    --shadow:0 1px 2px rgba(12,20,23,.06), 0 8px 24px -18px rgba(12,20,23,.28);
+  }}
+  * {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+  html {{ width:1280px; }}
+  html, body {{ background:var(--ground) !important; }}
+  .print-bar, .tile-info, .tile-tip {{ display:none !important; }}
+  .band-rail {{ position:static; }}
+}}
 </style>
 
 <div class="wrap">
+  <div class="print-bar"><button type="button" class="print-btn" onclick="window.print()">Save as PDF</button></div>
+  <script>
+  (function () {{
+    var st = document.createElement('style');
+    document.head.appendChild(st);
+    var de = document.documentElement;
+    window.addEventListener('beforeprint', function () {{
+      de.style.width = '1280px';
+      var h = Math.ceil(de.scrollHeight * 1.1) + 60;  /* margin: grey ground makes spare height invisible */
+      st.textContent = '@page {{ size:1280px ' + h + 'px; margin:0; }}';
+    }});
+    window.addEventListener('afterprint', function () {{ de.style.width = ''; }});
+  }})();
+  </script>
   <header class="masthead">
     <div>
       <p class="eyebrow">Firefly · Weekly KPI Scorecard</p>

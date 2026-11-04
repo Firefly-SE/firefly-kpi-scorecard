@@ -1,12 +1,16 @@
 #!/bin/bash
 # Weekly Firefly KPI collection, run unattended (launchd / cron) or by hand.
 #
-# Starts Claude Code headlessly from the repo root, so the project's .mcp.json
-# (Firefly credentials) and .claude/skills/firefly-weekly-kpi are both found, runs
-# the skill, then rebuilds every report from whatever snapshots are on disk.
+# Starts the configured AI client headlessly from the repo root and runs the
+# firefly-weekly-kpi skill, then rebuilds every report from whatever snapshots are
+# on disk. The client is "client" in config.json: claude (default) or kiro.
+#   claude: the project's .mcp.json and .claude/skills/firefly-weekly-kpi are found.
+#   kiro:   .kiro/settings/mcp.json, the firefly-kpi agent (.kiro/agents) and the
+#           .kiro/skills link are found. Both are written by setup.py.
 #
 # Everything reads the KPI home: $KPI_HOME, default <repo>/data.
-# Tunables (testing): NET_ATTEMPTS, NET_WAIT, NET_URL, SKIP_COLLECT, CLAUDE
+# Tunables (testing): NET_ATTEMPTS, NET_WAIT, NET_URL, SKIP_COLLECT, CLAUDE, KIRO, KPI_CLIENT,
+#                     KIRO_AGENT_FILE, KPI_NO_NOTIFY
 
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,8 +26,12 @@ cfg() {  # cfg <key> -> value from config.json, empty if unset
 [ -f "$KPI_HOME/config.json" ] || { echo "No $KPI_HOME/config.json - run: python3 setup.py" >&2; exit 1; }
 
 SERVER="$(cfg mcp_server)"; SERVER="${SERVER:-firefly}"
+CLIENT="${KPI_CLIENT:-$(cfg client)}"; CLIENT="${CLIENT:-claude}"
+case "$CLIENT" in claude|kiro) ;; *) echo "Unknown client '$CLIENT' in config.json (use claude or kiro)" >&2; exit 1 ;; esac
 CLAUDE="${CLAUDE:-$(cfg claude_bin)}"
 [ -n "$CLAUDE" ] && [ -x "$CLAUDE" ] || CLAUDE="$(command -v claude || true)"
+KIRO="${KIRO:-$(cfg kiro_bin)}"
+[ -n "$KIRO" ] && [ -x "$KIRO" ] || KIRO="$(command -v kiro-cli || true)"
 mkdir -p "$KPI_HOME/logs" "$KPI_HOME/snapshots" "$KPI_HOME/reports"
 
 WEEK=$(python3 -c "import datetime as d;y,w,_=d.date.today().isocalendar();print(f'{y}-W{w:02d}')")
@@ -39,6 +47,7 @@ NET_URL=${NET_URL:-https://mcpv2.firefly.ai/mcp}
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }  # GNU first: BSD rejects -c, but GNU accepts -f
 
 notify() {  # notify <subtitle> <message>; must never decide the exit code
+  [ "${KPI_NO_NOTIFY:-0}" = "1" ] && return 0   # tests
   if command -v osascript >/dev/null 2>&1; then
     osascript -e "display notification \"$2\" with title \"Firefly KPI $WEEK\" subtitle \"$1\"" 2>/dev/null || true
   elif command -v notify-send >/dev/null 2>&1; then
@@ -60,8 +69,21 @@ notify() {  # notify <subtitle> <message>; must never decide the exit code
   done
 
   if [ "$online" -eq 1 ]; then
+    echo "client: $CLIENT"
     if [ "${SKIP_COLLECT:-0}" = "1" ]; then
-      echo "SKIP_COLLECT=1 - not invoking claude (test mode)"
+      echo "SKIP_COLLECT=1 - not invoking $CLIENT (test mode)"
+    elif [ "$CLIENT" = "kiro" ]; then
+      if [ -z "$KIRO" ]; then
+        echo "ERROR: Kiro CLI ('kiro-cli') not found. Install it or set KIRO=/path/to/kiro-cli."
+      elif [ ! -f "${KIRO_AGENT_FILE:-$REPO/.kiro/agents/firefly-kpi.json}" ]; then
+        echo "ERROR: .kiro/agents/firefly-kpi.json is missing - run: python3 setup.py"
+      else
+        # Headless Kiro cannot ask for approval: the agent's permission rules decide what runs.
+        "$KIRO" chat --v3 --agent firefly-kpi --no-interactive --trust-workspace --require-mcp-startup \
+          "Run the weekly Firefly KPI collection for the configured account using the firefly-weekly-kpi skill. The KPI home is the directory in the KPI_HOME environment variable and is already set. This is an unattended run: never ask questions. Do not publish any artifact. When done, state the snapshot file path, the validator result, and the report file paths." 2>&1
+        echo
+        echo "--- kiro exited $? ---"
+      fi
     elif [ -z "$CLAUDE" ]; then
       echo "ERROR: Claude Code ('claude') not found. Install it or set CLAUDE=/path/to/claude."
     else

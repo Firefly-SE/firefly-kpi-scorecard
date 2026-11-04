@@ -3,6 +3,9 @@
   "collected_at": "2026-01-12",
   "account_id": "000000000000000000000000",
   "account_name": "Example Corp",
+  "collector": {
+    "client": "claude"
+  },
   "window": {
     "start": "2026-01-05",
     "end": "2026-01-12"

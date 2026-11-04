@@ -1,5 +1,8 @@
 # Live Firefly API credentials: never commit
 .mcp.json
+# Same for Kiro: setup.py writes the keys and a per-account agent here. The .kiro/skills link IS tracked.
+.kiro/settings/mcp.json
+.kiro/agents/firefly-kpi.json
 
 # One checkout = one account. Config, snapshots, reports and logs are local data.
 # (To keep snapshot history in git, delete this line and use a PRIVATE repo.)

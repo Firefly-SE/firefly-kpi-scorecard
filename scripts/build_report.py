@@ -64,6 +64,16 @@ def load_config():
     return load_json("config.json", {})
 
 
+# Which AI client collected a snapshot ("collector.client"). Older snapshots have none and show nothing.
+CLIENT_NAMES = {"claude": "Claude Code", "kiro": "Kiro CLI"}
+
+
+def collector_name(snap):
+    """Display name of the AI client that collected this snapshot, or '' if it was not recorded."""
+    c = (snap.get("collector") or {}).get("client")
+    return CLIENT_NAMES.get(c, str(c)) if c else ""
+
+
 def load_targets():
     """Per-account targets. A key set to null, or absent, means 'no target'."""
     return load_json("targets.json", {})
@@ -835,6 +845,8 @@ def main():
     aid = latest.get("account_id")
     account_line = (f"account {_esc(str(aid))}<br>\n      "
                     if aid and aid != "unspecified" else "")
+    ai = collector_name(latest)
+    with_ai = f" with {_esc(ai)}" if ai else ""
     html = f"""<title>{name} — Firefly KPI scorecard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1072,7 +1084,7 @@ a {{ color:var(--accent); }}
     </div>
     <div class="stamp">
       <b>{latest['week']}</b>
-      collected {latest['collected_at']}<br>
+      collected {latest['collected_at']}{with_ai}<br>
       {account_line}
       {len(loaded)} snapshot{'s' if len(loaded) != 1 else ''} on file
     </div>

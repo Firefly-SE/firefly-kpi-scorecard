@@ -12,7 +12,7 @@ repo (or `$KPI_HOME`), written by `python3 setup.py`:
 
 | File | Holds |
 |---|---|
-| `data/config.json` | `account_name`, `account_id`, `mcp_server`, `providers`, `runner_enabled`, `hidden_metrics` |
+| `data/config.json` | `account_name`, `account_id`, `client`, `mcp_server`, `providers`, `runner_enabled`, `hidden_metrics` |
 | `data/targets.json` | KPI targets |
 | `data/caveats.md` | standing caveats, rendered into every report |
 | `data/snapshots/` | one JSON per ISO week |
@@ -25,11 +25,18 @@ quoting a number. **Do not redefine a KPI here; change the framework doc.**
 
 ## Tool names
 
-Firefly tools are served by the MCP server named in `config.json` → `mcp_server`. In Claude
-Code each tool is `mcp__<mcp_server>__<tool>`, for example
-`mcp__firefly__inventory-api___get-iac-coverage`. The tables below give the `<tool>` part.
+Firefly tools are served by the MCP server named in `config.json` → `mcp_server`. The tables
+below give the `<tool>` part; the full name depends on the client (`config.json` → `client`):
+
+| Client | Full tool name | Example |
+|---|---|---|
+| Claude Code | `mcp__<mcp_server>__<tool>` | `mcp__firefly__inventory-api___get-iac-coverage` |
+| Kiro | `@<mcp_server>/<tool>` | `@firefly/inventory-api___get-iac-coverage` |
+
 If no tool with that server prefix exists, stop: the MCP server is not connected or not
-approved. Tell the user to run `claude` interactively in this folder and approve it.
+approved. In Claude Code, tell the user to run `claude` interactively in this folder and
+approve it. In Kiro, tell them to run `kiro-cli chat --v3 --agent firefly-kpi` and check `/mcp`,
+or to re-run `python3 setup.py`.
 
 ## Step 0: establish the week
 
@@ -88,6 +95,8 @@ of your own, and never describe them as actual spend.
   with a script. Do not add the figures up by eye.
 - `cost` is **absent**, not null or 0, when a policy has no cost model. Write that policy with
   `monthly_usd: null`. It still counts as a policy with its `total_assets`; it is not $0.
+- Write each policy's `monthly_usd` exactly as the API returns it (for example `10.559`); do
+  not round it. Only the monthly total below is rounded.
 - `type` is an array. Write `asset_type` as the entries joined with `", "`.
 - `cloud_waste.monthly_usd` is the sum of `cost` over the policies that have one, rounded to
   2 places. `cloud_waste.violating_assets` is the sum of `total_assets` over those same costed
@@ -138,6 +147,11 @@ The reliable count is the **sum of `workspaceCount`** over every project returne
 children do. Cross-check the total against `ci-api___list-workspaces` (#9): they should agree
 closely, and a large divergence means one was collected wrong.
 
+Call 11 (`list-project-workspaces`) is a drill-down, not part of the count. Skip it when the
+summed `workspaceCount` equals the CI workspace count from #9. If the two differ, run call 11
+for every project that has a `workspaceCount` and find out why before writing either number.
+Whenever you skip it, say so in `automation.note`.
+
 ### The API key may not see the whole tree
 
 Runner and CI counts depend on **which key collects them**. A key that is not a member of the
@@ -156,6 +170,23 @@ projects that hold the workspaces reads a low number, with no error. So:
   Never write `0`: zero means "none connected", null means "we could not tell".
 - **A provider that returns a count but no pagination cursor may be capped** by the API. Record
   the number and add a "treat as a floor" note under `integrations.notes`.
+- **Zero human activity in the audit log (call 13).** If `total` is 0 with
+  `actor_types:["user"]`, run call 13 once more without `actor_types` and `limit: 5` before you
+  write `adoption.note`, and say what you found (for example "no human activity; N activities
+  by API-key actors"). Do not guess a cause such as index lag or key scope: a successful empty
+  response is not evidence of either. If you cannot tell, write that the cause is unexplained.
+  Use that second query **only to write the note**. Never copy its counts, facets or scopes into
+  `adoption.*`: those fields count human users only, so with no human activity they stay
+  `weekly_activities: 0`, `weekly_active_users: 0`, `scopes_touched: 0`, `top_scope: null`,
+  `top_scope_count: null`, `scopes: []`, `users: []`. The unfiltered result also includes this
+  run's own API calls, so it is not evidence of platform usage.
+- **A facet bucket that is missing (call 14).** If the event-type facet has no `denied` bucket,
+  add up the buckets it does list. If they sum to the event total, nothing was denied: write
+  `denied: 0`. If they do not sum to the total, or the facet failed, write `null` with a note.
+  A missing bucket on its own is not a failed collection.
+- **An integration that is active but stale.** `list-integrations` returns `lastScan` for each
+  integration. If one is marked active and its last scan is more than 30 days old, count it as
+  usual and add a note under `integrations.notes.<provider>` naming it and its last scan date.
 - **`inventory-api___search-inventory` can intermittently 500.** It is not needed for the core
   snapshot; use it only for drill-downs.
 - **Any other failed call:** the field is `null` plus a note. **Never substitute a previous
@@ -165,6 +196,10 @@ projects that hold the workspaces reads a low number, with no error. So:
 
 Write `data/snapshots/<week>.json` matching `templates/snapshot.template.json` exactly; the
 report builder reads those key paths. Fill `account_id` and `account_name` from `config.json`. If `account_id` is blank there, write the string `"unspecified"`; never guess an ID.
+Set `collector.client` to the AI client you are running in, read from how the Firefly tools are
+named: `claude` if they are `mcp__<server>__<tool>` (Claude Code), `kiro` if they are
+`@<server>/<tool>` (Kiro). It is printed at the top of the report. Do not write a model name: you
+cannot verify it from inside the session.
 Keep the `notes`, `events.note` and `integrations.notes` fields: they render as caveats, so write
 them for a reader of the scorecard, not as a log of what you did.
 
@@ -198,12 +233,13 @@ script instead. If either script errors, say so rather than reporting stale numb
 | `data/reports/kpi-metrics.csv` | spreadsheets and decks |
 | `data/reports/kpi-metrics.json` | anything downstream |
 
-## Step 4: publish (optional, interactive sessions only)
+## Step 4: publish (optional, Claude Code interactive sessions only)
 
 The HTML file is self-contained, so sharing it as a file is enough. If the `Artifact` tool is
 available in this session **and** `config.json` has an `artifact_url`, republish
 `data/reports/firefly-kpi-scorecard.html` to that URL so the link stays stable. A headless
-`claude -p` run has no `Artifact` tool: skip this step and say so. Never invent a URL.
+`claude -p` run has no `Artifact` tool, and neither does Kiro: skip this step and say so.
+Never invent a URL.
 
 ## Step 5: the written read
 
@@ -233,6 +269,10 @@ reason nobody has confirmed, say it is **unexplained**; do not guess.
 A large single-week jump in assets, codified and ghost *together* is a crawler ingest event,
 not remediation. Say which it is; do not let an ingest read as progress. Put the explanation in
 the snapshot's top-level `notes` so it travels with the report.
+
+Quote IaC coverage exactly as `kpi-metrics.md` or the validator prints it, which is
+(codified + drifted) / (codified + drifted + unmanaged). Never recompute it from the counts
+yourself: codified divided by total assets is a different number.
 
 ### Caveats that must appear in every report
 

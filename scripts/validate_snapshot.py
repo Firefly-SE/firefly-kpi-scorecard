@@ -20,7 +20,7 @@ What it catches, and why:
 import json
 import sys
 
-from build_report import ROOT, SNAP_DIR, derive, g, load_config
+from build_report import CLIENT_NAMES, ROOT, SNAP_DIR, derive, g, load_config
 
 REQUIRED = [
     ("week",), ("collected_at",), ("account_id",), ("account_name",),
@@ -104,6 +104,20 @@ def main():
     want_id = (cfg.get("account_id") or "").strip()
     if want_id and snap.get("account_id") != want_id:
         errors.append(f"account_id {snap.get('account_id')} != config.json {want_id}")
+
+    client = (snap.get("collector") or {}).get("client")
+    if client and client not in CLIENT_NAMES:
+        warnings.append(f"collector.client '{client}' is not one of: {', '.join(CLIENT_NAMES)}")
+    want_client = cfg.get("client")
+    if client in CLIENT_NAMES and want_client and client != want_client:
+        warnings.append(f"collector.client is '{client}' but config.json says '{want_client}' "
+                        "(fine if you ran the other client by hand)")
+
+    ad = snap.get("adoption") if isinstance(snap.get("adoption"), dict) else {}
+    if ad.get("weekly_active_users") == 0 and ((ad.get("scopes_touched") or 0) > 0
+                                                 or (ad.get("top_scope_count") or 0) > 0 or ad.get("scopes")):
+        warnings.append("adoption shows activity (scopes_touched / top_scope / scopes) but weekly_active_users "
+                        "is 0. Adoption counts human users only; API-key activity must not be copied in.")
 
     for key in RARELY_ZERO:
         if g(snap, *key) == 0:

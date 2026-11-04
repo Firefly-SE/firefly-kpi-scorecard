@@ -3,6 +3,9 @@
   "collected_at": "YYYY-MM-DD",
   "account_id": "<from config.json>",
   "account_name": "<from config.json>",
+  "collector": {
+    "client": "claude | kiro"
+  },
   "window": {
     "start": "YYYY-MM-DD",
     "end": "YYYY-MM-DD"

@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from build_report import (ROOT, catalog, cloud_waste_caveats, cloud_waste_visible,  # noqa: E402
-                          comparison, derive, load_snapshots, shows_as_zero,
+                          collector_name, comparison, derive, load_snapshots, shows_as_zero,
                           standing_caveats, status)
 
 OUT_CSV = ROOT / "reports" / "kpi-metrics.csv"
@@ -76,7 +76,8 @@ def write_markdown(snaps, weeks, rows, pillars):
     L.append("  ")
     for s_ in snaps:
         w = s_.get("window") or {}
-        L.append(f"**{s_['week']}** collected {s_['collected_at']} "
+        ai = collector_name(s_)
+        L.append(f"**{s_['week']}** collected {s_['collected_at']}{' with ' + ai if ai else ''} "
                  f"(window {w.get('start')} → {w.get('end')})  ")
     L.append("")
     L.append("Definitions: `KPI-FRAMEWORK.md`; targets: `data/targets.json`. "
@@ -238,6 +239,7 @@ def main():
         "account": snaps[-1].get("account_name"),
         "account_id": snaps[-1].get("account_id"),
         "weeks": [{"week": s["week"], "collected_at": s["collected_at"],
+                   "collected_with": collector_name(s) or None,
                    "window": s.get("window")} for s in snaps],
         "comparison": f"{weeks[-2]} to {weeks[-1]}" if len(weeks) > 1 else weeks[-1],
         "metrics": rows,

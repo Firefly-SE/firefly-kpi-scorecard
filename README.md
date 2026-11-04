@@ -24,8 +24,9 @@ One checkout tracks **one Firefly account**. To track a second account, clone th
 
 ## How it works
 
-1. **Collect.** Claude Code runs the `/firefly-weekly-kpi` skill, which makes about 16 read-only
-   calls to the Firefly API (through the Firefly MCP server) and writes `data/snapshots/<ISO-week>.json`.
+1. **Collect.** Claude Code or Kiro CLI (your choice in setup) runs the `firefly-weekly-kpi` skill,
+   which makes about 16 read-only calls to the Firefly API (through the Firefly MCP server) and
+   writes `data/snapshots/<ISO-week>.json`. Both clients follow the same skill file.
 2. **Validate.** `scripts/validate_snapshot.py` checks the snapshot (see Safeguards).
 3. **Build.** `scripts/build_report.py` and `scripts/export_metrics.py` read every snapshot and write
    the reports. Pure Python, no dependencies. Both share one `derive()` function, so the HTML, CSV,
@@ -51,8 +52,9 @@ numbers with no error. Definitions and caveats are in [`KPI-FRAMEWORK.md`](KPI-F
 
 ## Requirements
 
-- **Claude Code** (the `claude` CLI), signed in. Collection is done by Claude following the skill, so
-  this is required for the weekly run. (Building reports from existing snapshots needs only Python.)
+- **An AI client, signed in: Claude Code (the `claude` CLI) or Kiro CLI (`kiro-cli`).** Collection is
+  done by the model following the skill, so one of them is required for the weekly run. (Building
+  reports from existing snapshots needs only Python.) See [Using Kiro CLI](#using-kiro-cli-instead-of-claude-code).
 - **Python 3.8+**. No packages to install.
 - **Firefly API keys**: an access key and a secret key, created in the Firefly web console under Settings > Users > User API Keys (the secret is shown only once). Read access is enough. Your **Firefly account ID** is needed only if you run this against several accounts.
 - macOS or Linux. Setup can install a weekly schedule on macOS; Linux uses a cron line it prints.
@@ -77,15 +79,49 @@ Then open `data/reports/firefly-kpi-scorecard.html`.
 > Clone somewhere **outside** Google Drive, Documents, Desktop and Downloads (for example `~/code`).
 > macOS blocks scheduled jobs from reading those folders, and they fail silently.
 
+## Using Kiro CLI instead of Claude Code
+
+Answer `kiro` at setup's "client" prompt. Everything else (the skill, the snapshot, the report build)
+is the same.
+
+```bash
+python3 setup.py                    # choose: kiro
+./scripts/weekly-run.sh             # collect headlessly, then rebuild the reports
+# or by hand:
+kiro-cli chat --v3 --agent firefly-kpi      # then ask it to run the firefly-weekly-kpi skill
+```
+
+Setup writes two files, both gitignored: `.kiro/settings/mcp.json` (your API keys, mode 600) and
+`.kiro/agents/firefly-kpi.json` (the agent). The `.kiro/skills/firefly-weekly-kpi` link to the shared
+skill is tracked. Sign in once with `kiro-cli login`.
+
+**What the agent may do.** Headless Kiro cannot ask for approval, so anything the agent's rules do not
+allow is denied. The agent is allowed the 12 read-only Firefly tools the skill calls (and no other
+tool from the server), writes under your KPI home, and runs `python3` plus a few read-only shell
+commands. `python3 *` is broad because the skill totals numbers with short inline scripts: treat the
+rules as guard rails, not a sandbox, and use a read-access Firefly key.
+
+**Differences from Claude Code**
+- Kiro has no `Artifact` tool, so the optional republish step is skipped.
+- The written week-over-week read at the end is written by whichever model runs it. The numbers in
+  the snapshot and the reports are computed by the scripts and are the ones to quote.
+
+**How much this has been tested.** One headless Kiro run and one Claude Code run against the same
+demo tenant on the same day. Every headline number in the two snapshots matched; they differed only in
+the notes the models wrote, which led to the skill changes in this release (check the audit log
+before explaining zero human activity, flag stale integrations, quote coverage as the scripts print
+it). That is one tenant and one pair of runs, so check a new account's first snapshot by eye.
+
 ## What `setup.py` asks
 
 | Prompt | Notes |
 |---|---|
 | Account name | shown at the top of the report |
 | More than one account? | answer no if this install is for your own Firefly account. Answer yes (SEs, consultants) to enter the account ID, shown in Firefly under Integrations > Connected integrations; snapshots from any other account are then refused |
-| Existing Firefly MCP server? | answer yes if `claude mcp list` already shows a Firefly server you want to use. You then give its name and no keys are asked for or stored by this tool |
-| MCP server name | otherwise: default `firefly`; the name Claude Code will use for the connection |
-| Access key / secret key | paste an existing pair or create one (the secret is shown only once, so a lost secret means a new pair). The secret is hidden as you type and stored only in this project's `.mcp.json` (mode 600, gitignored). Setup tests the keys against the API and says if they are rejected |
+| AI client | `claude` (Claude Code, the default) or `kiro` (Kiro CLI). A re-run keeps your previous choice |
+| Existing Firefly MCP server? | answer yes if `claude mcp list` (or `/mcp` inside `kiro-cli`) already shows a Firefly server you want to use. You then give its name and no keys are asked for or stored by this tool |
+| MCP server name | otherwise: default `firefly`; the name your client will use for the connection |
+| Access key / secret key | paste an existing pair or create one (the secret is shown only once, so a lost secret means a new pair). The secret is hidden as you type and stored only in this project's `.mcp.json` (Claude Code) or `.kiro/settings/mcp.json` (Kiro), mode 600, gitignored. Setup tests the keys against the API and says if they are rejected |
 | Providers | which of AWS, Azure, GCP, Kubernetes to count integrations for |
 | Uses Runners? | answer no to hide the Runner workspaces KPI |
 | Targets | suggested defaults, none, or set each one. Counts that depend on estate size (unmanaged, drifted, workspaces) are never defaulted |
@@ -95,13 +131,14 @@ Then open `data/reports/firefly-kpi-scorecard.html`.
 Re-run `python3 setup.py` any time. Existing answers are offered as defaults and nothing is deleted.
 
 **Unattended setup** (for scripting): `python3 setup.py --answers answers.json` with keys
-`account_name`, `account_id`, `existing_server` (true to skip keys), `access_key`, `secret_key`, `mcp_server`, `targets_mode` (1/2/3),
+`account_name`, `account_id`, `client` (`claude` or `kiro`), `existing_server` (true to skip keys), `access_key`, `secret_key`, `mcp_server`, `targets_mode` (1/2/3),
 `provider_aws`, `provider_azurerm`, `provider_gcp`, `provider_k8s`, `runner_enabled`, `copy_to`,
 `schedule`. `--skip-check` skips the credential test.
 
 ## Weekly use
 
-**By hand:** run `claude` in this folder and type `/firefly-weekly-kpi`. Running it twice in one week
+**By hand:** run `claude` in this folder and type `/firefly-weekly-kpi` (Kiro: run
+`kiro-cli chat --v3 --agent firefly-kpi` and ask it to run the skill). Running it twice in one week
 replaces that week's snapshot; earlier weeks are never touched.
 
 **Automatically:** `./scripts/weekly-run.sh` does the whole loop headlessly (wait for network, collect,
@@ -135,13 +172,18 @@ Everything per-account lives in `data/` (gitignored). Set `KPI_HOME=/some/dir` t
 
 | File | What it holds |
 |---|---|
-| `data/config.json` | account name and ID, MCP server name, providers, Runner on/off, `hidden_metrics`, `copy_to`, schedule |
+| `data/config.json` | account name and ID, AI client (`claude` or `kiro`), MCP server name, providers, Runner on/off, `hidden_metrics`, `copy_to`, schedule |
 | `data/targets.json` | `{"coverage_pct": 75, ...}`. Remove a key for "no target". Keys are listed in `KPI-FRAMEWORK.md` and `scripts/build_report.py` |
 | `data/caveats.md` | every line starting with `- ` is shown under "Measurement caveats" in every report |
 | `data/snapshots/` | one JSON per ISO week. Shape: `templates/snapshot.template.json` |
 
 A snapshot's top-level `notes` field is the place to explain an unexplained swing; it is rendered as a
 caveat on that week's report.
+
+A snapshot's `collector.client` (`claude` or `kiro`) says which AI client collected it. The report prints
+it at the top ("collected 2026-11-04 with Kiro CLI") and the Markdown and JSON exports carry it. Older
+snapshots without the field show nothing. The validator warns if the value is unknown or differs from
+`config.json`. Only the client is recorded, not a model name, because the model can't verify its own name.
 
 In the `cloud_waste` block, only `caveats` (a list of sentences a reader needs) is printed. `collector_note`
 holds process detail and is never shown. To hide the Cloud Waste tiles for an account with no cost models,
@@ -167,20 +209,22 @@ These exist because a wrong number on a scorecard does more harm than a missing 
 | Symptom | Likely cause and fix |
 |---|---|
 | Claude says no Firefly tools are available | The project MCP server isn't approved. Run `claude` interactively in this folder once and approve it; check `.mcp.json` exists |
+| Kiro run ends with "tool permission approval is not supported" | The call was not allowed by the agent's rules, so headless Kiro denied it. Check `.kiro/agents/firefly-kpi.json` exists (re-run `python3 setup.py`) and that the run used `--agent firefly-kpi` with `--v3` |
+| Kiro does not list the Firefly server | Start `kiro-cli chat --v3 --agent firefly-kpi` in this folder and type `/mcp`. Check `.kiro/settings/mcp.json` exists and the keys are valid |
 | Setup says the keys were rejected | Wrong key pair, or keys without access. Create a new pair in Firefly and re-run setup |
 | Cloud Waste tiles read "no data" | The policy or inventory call failed that week (the report says so under its caveats), or the snapshot predates the section. A tile with no earlier week to compare against reads "baseline" |
 | Waste or leakage fell by more than half | May be a real cleanup, or a key that cannot see every project. Check the key's project membership before believing it |
 | Runner or CI workspaces read far lower than expected | The collecting key isn't a member of the projects holding them. Use a key with access to the whole tree |
 | A provider reads "no data" | Its integrations call failed (timeouts happen). It is recorded as null on purpose; see the snapshot's `integrations.notes` |
-| Scheduled run never produces a snapshot | Repo is inside Google Drive/Documents/Desktop (macOS blocks launchd), or `claude` isn't on launchd's PATH. See `data/logs/launchd.err.log` and the week's log |
+| Scheduled run never produces a snapshot | Repo is inside Google Drive/Documents/Desktop (macOS blocks launchd), or `claude` / `kiro-cli` isn't on launchd's PATH. See `data/logs/launchd.err.log` and the week's log |
 | `snapshot(s) ... are not for account_id` | Snapshots from another account are in `data/snapshots/`. Move them out |
 
 Logs: `data/logs/<ISO-week>.log` for each run.
 
 ## Security
 
-- `.mcp.json` holds live API keys. It is gitignored and written mode 600. Don't paste it anywhere, and
-  re-check `git status` before any push.
+- `.mcp.json` (Claude Code) and `.kiro/settings/mcp.json` (Kiro) hold live API keys. Both are gitignored
+  and written mode 600. Don't paste them anywhere, and re-check `git status` before any push.
 - `data/` contains your account's usage data (including user email addresses from the adoption section).
   It is gitignored. If you remove that ignore to keep snapshot history in git, use a private repo.
 - Collection is **read-only**: the skill only calls list/search/get endpoints.
@@ -205,7 +249,8 @@ KPI_HOME=examples/demo-home python3 scripts/build_report.py
 ```
 setup.py                       guided configuration
 KPI-FRAMEWORK.md               KPI definitions (source of truth)
-.claude/skills/firefly-weekly-kpi/SKILL.md   the collection skill
+.claude/skills/firefly-weekly-kpi/SKILL.md   the collection skill (shared by both clients)
+.kiro/skills/firefly-weekly-kpi              link to that skill, for Kiro CLI
 scripts/build_report.py        HTML scorecard + shared derivation
 scripts/export_metrics.py      CSV / JSON / Markdown
 scripts/validate_snapshot.py   snapshot sanity checks

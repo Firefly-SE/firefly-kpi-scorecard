@@ -7,7 +7,9 @@
 
 Writes, for ONE Firefly account:
   .mcp.json                 Firefly API credentials for Claude Code (mode 600, gitignored)
-  data/config.json          account name/id, MCP server name, providers, schedule
+  .kiro/settings/mcp.json   the same for Kiro CLI, if you choose Kiro (mode 600, gitignored)
+  .kiro/agents/firefly-kpi.json   Kiro agent limited to the read-only Firefly tools (gitignored)
+  data/config.json          account name/id, AI client, MCP server name, providers, schedule
   data/targets.json         your KPI targets
   data/caveats.md           standing measurement caveats shown in every report
   (optional) a launchd agent on macOS for the weekly run
@@ -35,7 +37,27 @@ from build_report import DEFAULT_TARGETS, KPI_KEYS, _CATALOG  # noqa: E402
 
 MCP_URL = "https://mcpv2.firefly.ai/mcp"
 MCP_JSON = pathlib.Path(os.environ.get("KPI_MCP_JSON") or REPO / ".mcp.json")  # override is for tests
+KIRO_MCP_JSON = pathlib.Path(os.environ.get("KPI_KIRO_MCP_JSON") or REPO / ".kiro" / "settings" / "mcp.json")
+KIRO_AGENT_JSON = pathlib.Path(os.environ.get("KPI_KIRO_AGENT") or REPO / ".kiro" / "agents" / "firefly-kpi.json")
+KIRO_AGENT = "firefly-kpi"
+CLIENTS = ("claude", "kiro")
 PROVIDERS = ["aws", "azurerm", "gcp", "k8s"]
+# The only Firefly tools the collection skill calls, all read-only. The Kiro agent is allowed these and
+# nothing else from the server. A test keeps this list equal to the tools named in SKILL.md.
+READ_TOOLS = [
+    "inventory-api___get-iac-coverage",
+    "inventory-api___search-inventory",
+    "iacStacks-api___search-iac-stacks",
+    "governance-api___get_frameworks_score",
+    "governance-api___get_insights",
+    "ci-api___list-guardrails",
+    "ci-api___list-workspaces",
+    "runners-api___list-projects-flat",
+    "runners-api___list-project-workspaces",
+    "integrations-api___list-integrations",
+    "auditLog-api___query-audit-log-activities",
+    "events-api___query-events",
+]
 # Counts that only make sense relative to the size of one estate: never defaulted.
 SCALE_KEYS = ["unmanaged", "drifted", "ci_workspaces", "runner_workspaces"]
 LABELS = {k: lbl for _, _, ms in _CATALOG for k, lbl, *_ in ms}
@@ -141,6 +163,58 @@ def write_mcp_json(server, access, secret):
     os.chmod(path, 0o600)
 
 
+def write_kiro_mcp_json(server, access, secret):
+    """Kiro CLI's project MCP file. Keys are written in full (not ${VAR}) so a scheduled run, which has
+    no shell environment, can still connect. Mode 600 and gitignored, like .mcp.json."""
+    path = KIRO_MCP_JSON
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = load_json(path, {})
+    data.setdefault("mcpServers", {})[server] = {
+        "url": MCP_URL,
+        "headers": {"X-access-Key": access, "X-secret-Key": secret},
+    }
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(path, 0o600)
+
+
+def kiro_agent(server, home):
+    """The Kiro agent profile: read-only Firefly tools, writes only under the KPI home.
+
+    Headless Kiro cannot ask for approval, so anything not allowed here is denied. `python3 *` stays
+    broad because the skill totals numbers with short inline scripts; the deny list blocks the obvious
+    escapes (it is a guard rail, not a sandbox).
+    """
+    home = pathlib.Path(home)
+    return {
+        "name": KIRO_AGENT,
+        "description": "Collects the weekly Firefly KPI snapshot using only read-only Firefly MCP tools "
+                       "and rebuilds the scorecard.",
+        "prompt": ("You collect the weekly Firefly KPI snapshot. Follow the firefly-weekly-kpi skill exactly. "
+                   "Call only the read-only Firefly tools it lists. Never call a tool that creates, changes, "
+                   "deletes, deploys or triggers anything."),
+        "includeMcpJson": True,
+        "tools": ["read", "write", "shell"] + [f"@{server}/{t}" for t in READ_TOOLS],
+        "permissions": {"rules": [
+            {"capability": "mcp", "match": [f"{server}/{t}" for t in READ_TOOLS], "effect": "allow"},
+            {"capability": "skill", "match": ["firefly-weekly-kpi"], "effect": "allow"},
+            {"capability": "fs_read", "match": [f"{REPO}/**", f"{home}/**"], "effect": "allow"},
+            {"capability": "fs_write", "match": [f"{home}/**"], "effect": "allow"},
+            {"capability": "shell", "effect": "allow",
+             "match": ["python3 *", "KPI_HOME=* python3 *", "echo *", "ls *", "date *", "cat *", "head *",
+                       "tail *", "wc *", "mkdir -p *"]},
+            {"capability": "shell", "effect": "deny",
+             "match": ["rm *", "curl *", "wget *", "sudo *", "git push*"]},
+        ]},
+        "resources": ["skill://.kiro/skills/**/SKILL.md"],
+    }
+
+
+def write_kiro_agent(server, home):
+    path = KIRO_AGENT_JSON
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(kiro_agent(server, home), indent=2) + "\n")
+
+
 def configure_targets(p, existing, runner=True):
     say("\nTargets drive the green / amber / red status on each tile. A wrong target prints")
     say("misleading status, so the choice matters more than it looks.")
@@ -185,7 +259,7 @@ def configure_targets(p, existing, runner=True):
     return {k: targets[k] for k in KPI_KEYS if k not in skip and targets.get(k) is not None}
 
 
-def install_schedule(cfg, claude_bin, load):
+def install_schedule(cfg, client_bin, load):
     """Write (and optionally load) a launchd agent. macOS only."""
     slug = re.sub(r"[^a-z0-9]+", "-", cfg["account_name"].lower()).strip("-") or "account"
     label = f"ai.firefly.kpi.{slug}"
@@ -193,7 +267,7 @@ def install_schedule(cfg, claude_bin, load):
     logs = home / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     path_env = ":".join(filter(None, [
-        str(pathlib.Path(claude_bin).parent) if claude_bin else "",
+        str(pathlib.Path(client_bin).parent) if client_bin else "",
         "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]))
     plist = {
         "Label": label,
@@ -255,22 +329,34 @@ def main():
     if acct and not re.fullmatch(r"[0-9a-f]{24}", acct):
         say("  note: Firefly account IDs are normally 24 hex characters. Double-check this one.")
 
+    # -- which AI client collects the data ---------------------------------
+    say("\nWhich AI client runs the weekly collection? Both call the same read-only Firefly tools and")
+    say("write the same snapshot; the report build is plain Python either way.")
+    client = p.ask("client", "Client: claude (Claude Code) or kiro (Kiro CLI)", old.get("client") or "claude",
+                   check=lambda v: None if v.lower() in CLIENTS else "Enter claude or kiro").lower()
+    use_claude = client == "claude"
+    cname = "Claude Code" if use_claude else "Kiro"
+    mcp_file = ".mcp.json" if use_claude else ".kiro/settings/mcp.json"
+    mcp_path = MCP_JSON if use_claude else KIRO_MCP_JSON
+    write_keys = write_mcp_json if use_claude else write_kiro_mcp_json
+    list_hint = "`claude mcp list`" if use_claude else "`/mcp` inside kiro-cli"
+
     # -- MCP server + credentials -----------------------------------------
     existing = p.yes("existing_server",
-                     "Is a Firefly MCP server already configured in Claude Code (see `claude mcp list`)?",
+                     f"Is a Firefly MCP server already configured in {cname} (see {list_hint})?",
                      old.get("mcp_mode") == "existing")
     if existing:
-        server = p.ask("mcp_server", "Name of that server, exactly as `claude mcp list` shows it",
+        server = p.ask("mcp_server", f"Name of that server, exactly as {list_hint} shows it",
                        old.get("mcp_server") or "firefly",
                        check=lambda v: None if re.fullmatch(r"[A-Za-z0-9_-]+", v) else "Use letters, digits, - and _ only")
-        say(f"  using the existing '{server}' server; no keys will be asked for and .mcp.json is not touched.")
+        say(f"  using the existing '{server}' server; no keys will be asked for and {mcp_file} is not touched.")
         say("  Its key needs read access to every project you want counted, or workspace counts read low.")
     else:
-        server = p.ask("mcp_server", "Name to give the Firefly MCP server in Claude Code", old.get("mcp_server") or "firefly",
+        server = p.ask("mcp_server", f"Name to give the Firefly MCP server in {cname}", old.get("mcp_server") or "firefly",
                        check=lambda v: None if re.fullmatch(r"[A-Za-z0-9_-]+", v) else "Use letters, digits, - and _ only")
-        mcp = load_json(MCP_JSON, {})
+        mcp = load_json(mcp_path, {})
         have_creds = server in (mcp.get("mcpServers") or {})
-        if have_creds and not p.yes("replace_credentials", f"\n.mcp.json already has credentials for '{server}'. Replace them?", False):
+        if have_creds and not p.yes("replace_credentials", f"\n{mcp_file} already has credentials for '{server}'. Replace them?", False):
             say("  keeping existing credentials")
         else:
             say("\nPaste an existing Firefly API key pair, or create one in the web console")
@@ -279,8 +365,8 @@ def main():
             access = p.ask("access_key", "Access key", os.environ.get("FIREFLY_ACCESS_KEY"), required=True)
             secret = p.ask("secret_key", "Secret key (input hidden)", os.environ.get("FIREFLY_SECRET_KEY"),
                            secret=True, required=True)
-            write_mcp_json(server, access, secret)
-            say("  wrote .mcp.json (mode 600, gitignored)")
+            write_keys(server, access, secret)
+            say(f"  wrote {mcp_file} (mode 600, gitignored)")
             if not args.skip_check:
                 ok, msg = check_credentials(access, secret)
                 if ok:
@@ -306,8 +392,11 @@ def main():
         say(f"  note: {copy_to} does not exist yet; the copy step will log a warning until it does.")
 
     claude_bin = shutil.which("claude") or str(pathlib.Path.home() / ".local/bin/claude")
-    if not pathlib.Path(claude_bin).exists():
-        say("\n  WARNING: Claude Code ('claude') was not found. Weekly collection needs it. See README > Requirements.")
+    kiro_bin = shutil.which("kiro-cli") or str(pathlib.Path.home() / ".local/bin/kiro-cli")
+    client_bin = claude_bin if use_claude else kiro_bin
+    if not pathlib.Path(client_bin).exists():
+        binary = "claude" if use_claude else "kiro-cli"
+        say(f"\n  WARNING: {cname} ('{binary}') was not found. Weekly collection needs it. See README > Requirements.")
 
     sched = old.get("schedule") or {"enabled": False, "weekday": 1, "hour": 7, "minute": 0}
     mac = sys.platform == "darwin"
@@ -331,7 +420,8 @@ def main():
         "account_name": name, "account_id": acct, "mcp_server": server,
         "mcp_mode": "existing" if existing else "project",
         "providers": provs, "runner_enabled": runner, "hidden_metrics": hidden,
-        "claude_bin": claude_bin, "copy_to": copy_to or None, "schedule": sched,
+        "client": client, "claude_bin": claude_bin, "kiro_bin": kiro_bin,
+        "copy_to": copy_to or None, "schedule": sched,
     }
     for d in ("snapshots", "reports", "logs"):
         (home / d).mkdir(parents=True, exist_ok=True)
@@ -340,19 +430,28 @@ def main():
     if not (home / "caveats.md").exists():
         (home / "caveats.md").write_text(CAVEATS_TEMPLATE)
     say(f"\nWrote {home}/config.json, targets.json, caveats.md")
+    if not use_claude:
+        write_kiro_agent(server, home)
+        say(f"Wrote {KIRO_AGENT_JSON} (agent '{KIRO_AGENT}': read-only Firefly tools, writes only under {home})")
 
     if sched["enabled"]:
         say("\nSchedule:")
-        install_schedule(cfg, claude_bin, load=not args.no_load and (p.interactive or p.yes("load_schedule", "", True)))
+        install_schedule(cfg, client_bin, load=not args.no_load and (p.interactive or p.yes("load_schedule", "", True)))
     elif not mac:
         say("\nSchedule (not macOS): add this line with `crontab -e` to run every Monday 07:00:")
         say(f"  0 7 * * 1 KPI_HOME='{home}' /bin/bash '{REPO}/scripts/weekly-run.sh'")
 
     say("\nNext steps")
-    say("  1. cd into this folder and run:  claude")
-    say("     (approve the project's Firefly MCP server the first time Claude asks)")
-    say("  2. Inside Claude, run:           /firefly-weekly-kpi")
-    say("  3. Open data/reports/firefly-kpi-scorecard.html")
+    if use_claude:
+        say("  1. cd into this folder and run:  claude")
+        say("     (approve the project's Firefly MCP server the first time Claude asks)")
+        say("  2. Inside Claude, run:           /firefly-weekly-kpi")
+    else:
+        say("  1. cd into this folder and run:  ./scripts/weekly-run.sh")
+        say("     (runs Kiro headless with the restricted agent; takes a few minutes)")
+        say(f"     or interactively:             kiro-cli chat --v3 --agent {KIRO_AGENT}")
+        say("     and ask it to run the firefly-weekly-kpi skill")
+    say(f"  {2 if not use_claude else 3}. Open data/reports/firefly-kpi-scorecard.html")
     say("  Re-run `python3 setup.py` any time to change settings.")
 
 

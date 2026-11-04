@@ -529,6 +529,224 @@ class TestSetup(Base):
         self.assertEqual(json.loads(mcp.read_text())["mcpServers"]["firefly"]["headers"]["X-access-Key"], "AK")
 
 
+def load_setup():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kpi_setup", REPO / "setup.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestKiro(Base):
+    SKILL = REPO / ".claude" / "skills" / "firefly-weekly-kpi" / "SKILL.md"
+
+    def _setup(self, extra=None, expect_ok=True):
+        home = self.tmp / "fresh"
+        af = self.tmp / "a.json"
+        af.write_text(json.dumps({"account_name": "Acme", "access_key": "AK", "secret_key": "SK",
+                                  "mcp_server": "acme-firefly", "targets_mode": "1", **(extra or {})}))
+        env = {"KPI_MCP_JSON": str(self.tmp / "claude-mcp.json"),
+               "KPI_KIRO_MCP_JSON": str(self.tmp / "kiro" / "mcp.json"),
+               "KPI_KIRO_AGENT": str(self.tmp / "kiro" / "agent.json")}
+        r = run("setup.py", home, "--answers", str(af), "--skip-check", env=env)
+        if expect_ok:
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return home, r
+
+    def test_client_defaults_to_claude(self):
+        home, _ = self._setup()
+        self.assertEqual(json.loads((home / "config.json").read_text())["client"], "claude")
+        self.assertTrue((self.tmp / "claude-mcp.json").exists())
+        self.assertFalse((self.tmp / "kiro").exists())
+
+    def test_unknown_client_is_rejected(self):
+        _, r = self._setup({"client": "gpt"}, expect_ok=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("client", r.stdout + r.stderr)
+
+    def test_kiro_setup_writes_keys_and_agent_but_not_claude_files(self):
+        home, _ = self._setup({"client": "kiro"})
+        self.assertEqual(json.loads((home / "config.json").read_text())["client"], "kiro")
+        mcp = self.tmp / "kiro" / "mcp.json"
+        m = json.loads(mcp.read_text())["mcpServers"]["acme-firefly"]
+        self.assertEqual(m["url"], "https://mcpv2.firefly.ai/mcp")
+        self.assertEqual(m["headers"], {"X-access-Key": "AK", "X-secret-Key": "SK"})
+        self.assertEqual(oct(mcp.stat().st_mode & 0o777), "0o600")
+        self.assertFalse((self.tmp / "claude-mcp.json").exists())
+        self.assertTrue((self.tmp / "kiro" / "agent.json").exists())
+
+    def test_kiro_agent_is_limited_to_read_only_firefly_tools(self):
+        home, _ = self._setup({"client": "kiro"})
+        agent = json.loads((self.tmp / "kiro" / "agent.json").read_text())
+        s = load_setup()
+        self.assertEqual(agent["name"], "firefly-kpi")
+        rules = agent["permissions"]["rules"]
+        mcp_rules = [r for r in rules if r["capability"] == "mcp"]
+        self.assertEqual(len(mcp_rules), 1)
+        self.assertEqual(mcp_rules[0]["effect"], "allow")
+        self.assertEqual(set(mcp_rules[0]["match"]), {f"acme-firefly/{t}" for t in s.READ_TOOLS})
+        for rule in mcp_rules[0]["match"]:      # no wildcard may widen the server grant
+            self.assertNotIn("*", rule)
+        mcp_tools = [t for t in agent["tools"] if t.startswith("@")]
+        self.assertEqual(set(mcp_tools), {f"@acme-firefly/{t}" for t in s.READ_TOOLS})
+        for t in s.READ_TOOLS:                  # nothing that changes state may be listed
+            self.assertNotRegex(t, r"create|update|delete|deploy|trigger|approve|edit|move|replace|record")
+        writes = [r for r in rules if r["capability"] == "fs_write"]
+        self.assertEqual([r["match"] for r in writes], [[f"{home.resolve()}/**"]])
+        self.assertTrue(any(r["capability"] == "shell" and r["effect"] == "deny" for r in rules))
+        self.assertIn("skill://.kiro/skills/**/SKILL.md", agent["resources"])
+
+    def test_read_tools_match_the_tools_named_in_the_skill(self):
+        # If the skill starts calling another tool, the Kiro agent must be told, or headless runs deny it.
+        named = set(re.findall(r"`([A-Za-z]+-api___[A-Za-z_-]+)`", self.SKILL.read_text()))
+        self.assertEqual(named, set(load_setup().READ_TOOLS))
+
+    def test_kiro_skill_link_is_the_shared_skill(self):
+        link = REPO / ".kiro" / "skills" / "firefly-weekly-kpi" / "SKILL.md"
+        self.assertTrue(link.exists(), "missing .kiro/skills/firefly-weekly-kpi link")
+        self.assertEqual(link.resolve(), self.SKILL.resolve())
+        m = re.match(r"---\nname: (.+)\ndescription: (.+)\n---", self.SKILL.read_text())
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "firefly-weekly-kpi")      # Kiro requires it to match the folder name
+        self.assertLessEqual(len(m.group(2)), 1024)             # and caps the description
+
+    def test_kiro_credentials_and_agent_are_gitignored(self):
+        lines = (REPO / ".gitignore").read_text().splitlines()
+        self.assertIn(".kiro/settings/mcp.json", lines)
+        self.assertIn(".kiro/agents/firefly-kpi.json", lines)
+
+    def _fake(self, name):
+        p = self.tmp / name
+        p.write_text('#!/bin/bash\necho "$@" > "$0.args"\n')
+        p.chmod(0o755)
+        return p
+
+    def _weekly(self, client, **env):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["client"] = client
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        e = {**os.environ, "KPI_HOME": str(self.home), "NET_ATTEMPTS": "1", "NET_WAIT": "0",
+             "NET_URL": "file:///etc/hosts", "KPI_NO_NOTIFY": "1", **env}
+        subprocess.run(["bash", str(REPO / "scripts" / "weekly-run.sh")], env=e, capture_output=True, text=True)
+        return "".join(p.read_text() for p in (self.home / "logs").glob("*.log"))
+
+    def test_weekly_run_starts_kiro_with_the_restricted_agent(self):
+        fake, agent = self._fake("fake-kiro"), self.tmp / "agent.json"
+        agent.write_text("{}")
+        log = self._weekly("kiro", KIRO=str(fake), KIRO_AGENT_FILE=str(agent))
+        args = pathlib.Path(str(fake) + ".args").read_text()
+        for expected in ("chat", "--v3", "--agent firefly-kpi", "--no-interactive"):
+            self.assertIn(expected, args)
+        self.assertIn("client: kiro", log)
+
+    def test_weekly_run_says_so_when_the_kiro_agent_is_missing(self):
+        fake = self._fake("fake-kiro")
+        log = self._weekly("kiro", KIRO=str(fake), KIRO_AGENT_FILE=str(self.tmp / "absent.json"))
+        self.assertFalse(pathlib.Path(str(fake) + ".args").exists())
+        self.assertIn("firefly-kpi.json is missing", log)
+
+    def test_weekly_run_still_starts_claude_by_default(self):
+        fake = self._fake("fake-claude")
+        log = self._weekly("claude", CLAUDE=str(fake))
+        args = pathlib.Path(str(fake) + ".args").read_text()
+        self.assertIn("-p /firefly-weekly-kpi", args)
+        self.assertIn("mcp__firefly", args)
+        self.assertIn("client: claude", log)
+
+
+class TestCollectorLabel(Base):
+    """The report says which AI client collected the latest snapshot."""
+
+    def _set(self, client):
+        p = self.home / "snapshots" / "2026-W02.json"
+        s = json.loads(p.read_text())
+        if client is None:
+            s.pop("collector", None)
+        else:
+            s["collector"] = {"client": client}
+        p.write_text(json.dumps(s))
+
+    def _build(self):
+        run("scripts/build_report.py", self.home, check=True)
+        run("scripts/export_metrics.py", self.home, check=True)
+
+    def _exports(self):
+        md = (self.home / "reports" / "kpi-metrics.md").read_text()
+        js = json.loads((self.home / "reports" / "kpi-metrics.json").read_text())
+        return md, js
+
+    def test_masthead_and_exports_name_kiro(self):
+        self._set("kiro")
+        self._build()
+        self.assertIn("collected 2026-01-12 with Kiro CLI<br>", self.html())
+        md, js = self._exports()
+        self.assertIn("collected 2026-01-12 with Kiro CLI", md)
+        self.assertEqual(js["weeks"][-1]["collected_with"], "Kiro CLI")
+
+    def test_masthead_names_claude_code(self):
+        self._set("claude")
+        self._build()
+        self.assertIn("collected 2026-01-12 with Claude Code<br>", self.html())
+
+    def test_snapshot_without_a_collector_shows_nothing(self):
+        self._set(None)
+        self._build()
+        self.assertIn("collected 2026-01-12<br>", self.html())
+        md, js = self._exports()
+        self.assertNotIn("2026-01-12 with", md)
+        self.assertIsNone(js["weeks"][-1]["collected_with"])
+
+    def test_collector_value_is_escaped(self):
+        self._set("<img src=x>")
+        self._build()
+        self.assertNotIn("<img src=x>", self.html())
+        self.assertIn("with &lt;img src=x&gt;", self.html())
+
+    def test_validator_warns_on_an_unknown_client(self):
+        self._set("gpt")
+        r = run("scripts/validate_snapshot.py", self.home)
+        self.assertIn("collector.client 'gpt' is not one of", r.stdout)
+
+    def test_validator_warns_when_client_differs_from_config(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        cfg["client"] = "claude"
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        self._set("kiro")
+        r = run("scripts/validate_snapshot.py", self.home)
+        self.assertIn("config.json says 'claude'", r.stdout)
+        self._set("claude")
+        r = run("scripts/validate_snapshot.py", self.home)
+        self.assertNotIn("config.json says", r.stdout)
+
+    def _adoption(self, **fields):
+        p = self.home / "snapshots" / "2026-W02.json"
+        s = json.loads(p.read_text())
+        s["adoption"].update(fields)
+        p.write_text(json.dumps(s))
+        return run("scripts/validate_snapshot.py", self.home)
+
+    def test_validator_flags_api_key_activity_copied_into_adoption(self):
+        # Zero human users but scopes filled in: the signature of API-key activity leaking in.
+        r = self._adoption(weekly_active_users=0, scopes_touched=13, top_scope="Inventory",
+                           top_scope_count=1388, scopes=[{"scope": "Inventory", "count": 1388}])
+        self.assertIn("API-key activity must not be copied in", r.stdout)
+
+    def test_validator_accepts_genuinely_empty_adoption(self):
+        r = self._adoption(weekly_active_users=0, weekly_activities=0, scopes_touched=0, top_scope=None,
+                           top_scope_count=None, scopes=[], users=[])
+        self.assertNotIn("API-key activity", r.stdout)
+
+    def test_skill_keeps_the_unfiltered_audit_query_out_of_the_metrics(self):
+        skill = (REPO / ".claude" / "skills" / "firefly-weekly-kpi" / "SKILL.md").read_text()
+        self.assertIn("only to write the note", skill)
+
+    def test_template_and_skill_carry_the_field(self):
+        tpl = json.loads((REPO / "templates" / "snapshot.template.json").read_text())
+        self.assertIn("collector", tpl)
+        skill = (REPO / ".claude" / "skills" / "firefly-weekly-kpi" / "SKILL.md").read_text()
+        self.assertIn("collector.client", skill)
+
+
 class TestNoAccountSpecificStrings(unittest.TestCase):
     """The repo is shared across accounts; nothing from the account it was extracted from may remain."""
 
@@ -542,6 +760,8 @@ class TestNoAccountSpecificStrings(unittest.TestCase):
                  and not any(part in (".git", "data", "__pycache__") for part in p.parts)
                  and p.resolve() != pathlib.Path(__file__).resolve()
                  and p.name != ".mcp.json"
+                 # generated per user by setup.py (keys, local paths) and gitignored
+                 and p.relative_to(REPO).as_posix() not in (".kiro/settings/mcp.json", ".kiro/agents/firefly-kpi.json")
                  and p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif")]  # binary: random bytes can match
         self.assertTrue(files)
         hits = []
